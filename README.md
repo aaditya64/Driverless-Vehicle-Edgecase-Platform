@@ -1,9 +1,11 @@
-# Driverless Vehicle Edge-Case Platform
+# Driverless-Vehicle-Edgecase-Platform
 
-This workspace contains the current ML/data-preparation code for the driverless vehicle edge-case intelligence platform.
+This repository contains the current web app structure plus the ML/data-preparation code for the driverless vehicle edge-case intelligence platform.
 
-## What is tracked
+## Repository Structure
 
+- `frontend/`: existing Vite/React frontend.
+- `backend/`: existing backend scaffold.
 - `scripts/download_badas_open.py`: downloads BADAS-Open from Hugging Face after access is approved.
 - `scripts/inference_badas.py`: runs BADAS-Open risk timeline inference on a dashcam video.
 - `scripts/create_event_clips.py`: cuts 10-second Nexar positive clips centred on `time_of_event`.
@@ -17,7 +19,7 @@ Large local assets are intentionally not tracked:
 - downloaded BADAS/V-JEPA model weights
 - inference outputs
 
-## Setup
+## ML Setup
 
 ```bash
 python -m pip install -r requirements.txt
