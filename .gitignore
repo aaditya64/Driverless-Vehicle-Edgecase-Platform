@@ -1,0 +1,39 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*.log
+.env
+.venv/
+venv/
+
+# Existing app structure
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+frontend/node_modules/
+frontend/dist/
+
+# Large local datasets and generated media
+data/nexar_collision_prediction/
+data/processed/event_clips/
+data/processed/**/*.mp4
+*.mp4
+
+# Keep small generated manifests for reproducibility.
+!data/processed/
+!data/processed/clip_manifests/
+!data/processed/clip_manifests/*.csv
+
+# Downloaded model repos, checkpoints, and inference outputs
+models/
+outputs/
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+*.onnx
+
+# Local cache directories
+.cache/
+*/.cache/
