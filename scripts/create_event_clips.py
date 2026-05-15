@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -96,6 +98,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Write the manifest without running ffmpeg.",
     )
+    parser.add_argument(
+        "--ffmpeg-command",
+        default="ffmpeg",
+        help="Path or command name for ffmpeg. Default: ffmpeg.",
+    )
+    parser.add_argument(
+        "--ffprobe-command",
+        default="ffprobe",
+        help="Path or command name for ffprobe. Default: ffprobe.",
+    )
     return parser.parse_args()
 
 
@@ -109,6 +121,55 @@ def parse_float(value: Any) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def resolve_executable(command: str, name: str) -> str:
+    explicit_path = Path(command)
+    if explicit_path.is_file():
+        return str(explicit_path.resolve())
+
+    resolved = shutil.which(command)
+    if resolved:
+        return resolved
+
+    env_var = os.environ.get(f"{name.upper()}_PATH")
+    if env_var:
+        env_path = Path(env_var)
+        if env_path.is_file():
+            return str(env_path.resolve())
+
+    candidate_dirs = []
+    if os.name == "nt":
+        candidate_dirs.extend(
+            [
+                Path("C:/Program Files/Gyan/FFmpeg/bin"),
+                Path("C:/Program Files (x86)/Gyan/FFmpeg/bin"),
+                Path("C:/Program Files/ffmpeg/bin"),
+                Path("C:/Program Files (x86)/ffmpeg/bin"),
+                Path("C:/Program Files/Gyan/FFmpeg"),
+                Path("C:/Program Files (x86)/Gyan/FFmpeg"),
+            ]
+        )
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            winget_packages = Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
+            candidate_dirs.extend(
+                sorted(
+                    winget_packages.glob("Gyan.FFmpeg_Microsoft.Winget.Source_*/ffmpeg-*/bin"),
+                    reverse=True,
+                )
+            )
+
+    executable_name = command if command.lower().endswith(".exe") else f"{command}.exe"
+    for directory in candidate_dirs:
+        candidate = directory / executable_name
+        if candidate.is_file():
+            return str(candidate.resolve())
+
+    raise FileNotFoundError(
+        f"Could not find '{name}' from '{command}'. Install FFmpeg and add it to PATH, "
+        f"or pass the full path with --{name}-command, or set {name.upper()}_PATH."
+    )
 
 
 def round_time(value: float | None) -> float | None:
@@ -125,9 +186,9 @@ def repo_relative_path(path: Path) -> str:
         return str(resolved)
 
 
-def ffprobe_duration(video_path: Path) -> float | None:
+def ffprobe_duration(video_path: Path, ffprobe_command: str) -> float | None:
     cmd = [
-        "ffprobe",
+        ffprobe_command,
         "-v",
         "error",
         "-show_entries",
@@ -179,11 +240,12 @@ def run_ffmpeg(
     duration: float,
     overwrite: bool,
     copy_video: bool,
+    ffmpeg_command: str,
 ) -> tuple[bool, str]:
     output_clip.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        "ffmpeg",
+        ffmpeg_command,
         "-hide_banner",
         "-loglevel",
         "error",
@@ -302,6 +364,11 @@ def main() -> int:
     print(f"Output directory: {output_dir}")
     print(f"Manifest: {manifest_path}")
 
+    ffmpeg_path = resolve_executable(args.ffmpeg_command, "ffmpeg")
+    ffprobe_path = resolve_executable(args.ffprobe_command, "ffprobe")
+    print(f"Using ffmpeg: {ffmpeg_path}")
+    print(f"Using ffprobe: {ffprobe_path}")
+
     manifest_rows: list[dict[str, Any]] = []
     created_count = 0
     exists_count = 0
@@ -380,7 +447,7 @@ def main() -> int:
                 )
                 continue
 
-            video_duration = ffprobe_duration(source_video)
+            video_duration = ffprobe_duration(source_video, ffprobe_command=ffprobe_path)
             clip_start_time, actual_duration, center_offset = compute_clip_bounds(
                 event_center_time=event_center_time,
                 video_duration=video_duration,
@@ -433,6 +500,7 @@ def main() -> int:
                 duration=actual_duration,
                 overwrite=args.overwrite,
                 copy_video=args.copy_video,
+                ffmpeg_command=ffmpeg_path,
             )
 
             if ok:
