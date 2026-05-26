@@ -1,1180 +1,546 @@
 # ML Pipeline Context and Progress
 
-Last updated: 2026-05-16
+Last updated: 2026-05-26
 
-This document records the current understanding, implementation state, file layout, and next steps for the ML/data-preparation part of the Driverless Vehicle Edge-Case Intelligence Platform.
+This document summarizes the ML/data pipeline for the Driverless Vehicle Edge-Case Intelligence Platform. It is written for teammates who did not participate in the ML experiments and need to understand what was built, what files matter, how to reproduce the current result, and what still needs engineering work before backend/full-stack integration.
 
-## 1. Overall Goal
+## 1. Current Executive Summary
 
-The ML component takes ego-centric dashcam videos as input and produces structured traffic-risk analysis outputs for a searchable edge-case intelligence platform.
-
-The planned pipeline separates temporal risk detection from semantic interpretation:
-
-1. BADAS-based risk model
-   - Detects whether a clip contains ego-centric traffic risk.
-   - Produces a risk timeline over the video.
-   - Supports key-risk timestamp extraction.
-   - Currently works as a binary model: `safe` vs `collision_or_near_miss`.
-
-2. Three-class core outcome classifier
-   - Target labels: `safe`, `near_miss`, `collision`.
-   - Initial conditional head training script is implemented.
-   - Current design keeps BADAS as the binary risk gate and trains a small head for `P(collision | risky)`.
-   - Manual relabelling of the 750 Nexar train positive clips has now been completed by classmates.
-   - The manual labels were added to the annotation CSV in a new column named `manual_label`.
-
-3. Qwen3-VL semantic tag classifier
-   - Planned for later.
-   - Will consume BADAS-extracted 10-second clips.
-   - Expected outputs include actor type, scenario type, road type, weather, avoidance behaviour, collision geometry, near-miss type, and a structured incident summary.
-
-## 2. Dataset Strategy
-
-### Nexar
-
-Nexar is the current primary target-domain dataset.
-
-Local expected path:
+The current best model solves the positive-only Nexar task:
 
 ```text
-data/nexar_collision_prediction/
+10-second event-centered positive clip -> near_miss or collision
 ```
 
-Relevant original metadata:
+It does not yet solve the full three-class task:
 
 ```text
-data/nexar_collision_prediction/train/positive/metadata.csv
-data/nexar_collision_prediction/train/negative/metadata.csv
+safe / near_miss / collision
 ```
 
-Important Nexar metadata columns:
+Current best fixed-split result:
 
 ```text
-file_name
-time_of_event
-time_of_alert
-light_conditions
-weather
-scene
-time_to_accident
+selected=lgbm_k512/rescue_q0.371/w2.50/fixed0p5
+threshold=0.5
+val_accuracy=0.915966386555
+val_macro_f1=0.915674603175
+test_accuracy=0.939597315436
+test_auroc=0.964556962025
+test_confusion=[[75, 4], [5, 65]]
 ```
 
-For positive training videos, `time_of_event` is available and is used as the event-centre timestamp for clip extraction.
-
-Important limitation:
+Label order in the confusion matrix:
 
 ```text
-Nexar positive = collision_or_near_miss
+[near_miss, collision]
 ```
 
-Nexar does not directly separate `near_miss` and `collision`, so positive clips originally required manual review before a three-class model could be trained.
-
-Current update:
+So the final test result means:
 
 ```text
-All 750 Nexar train positive clips have been manually labelled.
-The labels are stored in a CSV column named: manual_label
+near_miss correct: 75
+near_miss predicted as collision: 4
+collision predicted as near_miss: 5
+collision correct: 65
+total test samples: 149
+total errors: 9
 ```
 
-Important compatibility note:
+The reproducible package is:
 
 ```text
-Older manifest/training flow expects: core_label
-Current annotated CSV uses: manual_label
+collision_contact_full_repro/
 ```
 
-Formal training can now run from the default manifest by passing `--label-column manual_label`.
-
-### SAVeD and NIDB
-
-SAVeD is planned as an external hard-sample dataset with richer semantic annotations. It has not been integrated into the local scripts yet.
-
-NIDB remains optional and has not been integrated.
-
-## 3. Current Repository State
-
-Current branch used for the full ML upload:
+The final trained model/report artifacts are:
 
 ```text
-ml-badas-preprocessing
+collision_contact_full_repro/outputs/collision_contact_model/
 ```
 
-GitHub branch:
+## 2. What Changed Since the Earlier BADAS Baseline
+
+The project started with BADAS/V-JEPA features as a risk-oriented baseline. That baseline was useful but not strong enough for the fine boundary between physical contact and very close near-misses.
+
+Earlier BADAS conditional head:
 
 ```text
-https://github.com/aaditya64/Driverless-Vehicle-Edgecase-Platform/tree/ml-badas-preprocessing
+input: BADAS window embeddings, risk scores, timestamps
+task: P(collision | risky)
+data: 750 manually labelled Nexar train positive clips
+result: about 0.81 test accuracy and about 0.88 AUROC over multiple seeds
 ```
 
-Tracked files include:
+After label cleanup and bad/unclear clip removal, the usable set became:
 
 ```text
-README.md
-requirements.txt
-scripts/download_badas_open.py
-scripts/inference_badas.py
-scripts/create_event_clips.py
-scripts/extract_badas_window_features.py
-scripts/train_badas_outcome_head.py
-data/processed/clip_manifests/nexar_train_positive_event_clips.csv
-doc/
-frontend/
-backend/
+usable samples: 744
+task: near_miss vs collision
 ```
 
-Large local assets are intentionally not tracked by git:
+The fixed07 BADAS-style baseline was still limited:
 
 ```text
-data/nexar_collision_prediction/
-data/processed/event_clips/
-models/
-outputs/
+test AP:       about 0.886
+test AUROC:    about 0.895
+test accuracy: about 0.818
+collision F1:  about 0.812
 ```
 
-This means each team member must download datasets and model weights locally.
-
-## 4. Dependencies and Environment
-
-Python dependencies are listed in:
+Main conclusion from the baseline stage:
 
 ```text
-requirements.txt
+BADAS features capture risk severity, but they often miss the physical-contact evidence needed to separate collision from collision-like near_miss.
 ```
 
-Important requirement:
+The current final method improves the result by adding camera transient vibration, wavelet/global-motion features, object residual physics, CoTracker object dynamics, and a released long-context anchor.
+
+## 3. Dataset and Labels
+
+Primary dataset:
 
 ```text
-transformers==4.57.3
-psutil>=5.9.0
+Nexar Collision Prediction positive clips
 ```
 
-This version is needed because older versions such as `4.52.4` do not recognize the `vjepa2` architecture used by BADAS-Open.
-
-`psutil` is required by the BADAS-Open training module that is reused when loading the checkpoint and extracting features.
-
-External command-line tools required for clip extraction:
+Original Nexar positive labels only mean:
 
 ```text
-ffmpeg
-ffprobe
-```
-
-Check availability:
-
-```bash
-which ffmpeg
-which ffprobe
-```
-
-On macOS, install with:
-
-```bash
-brew install ffmpeg
-```
-
-## 5. BADAS-Open Model Setup
-
-BADAS-Open is downloaded from Hugging Face after access approval.
-
-Local expected path:
-
-```text
-models/BADAS-Open/
-```
-
-Important local files after download:
-
-```text
-models/BADAS-Open/src/
-models/BADAS-Open/weights/badas_open.pth
-models/BADAS-Open/config.json
-models/BADAS-Open/README.md
-```
-
-Download helper:
-
-```text
-scripts/download_badas_open.py
-```
-
-Usage:
-
-```bash
-huggingface-cli login
-python scripts/download_badas_open.py
-```
-
-Notes:
-
-- The script assumes the user has accepted the BADAS-Open Hugging Face access conditions.
-- BADAS-Open also needs the base model `facebook/vjepa2-vitl-fpc16-256-ssv2`.
-- The first inference run may download/cache the V-JEPA2 base model through Hugging Face.
-
-## 6. BADAS Inference Script
-
-Implemented script:
-
-```text
-scripts/inference_badas.py
-```
-
-Purpose:
-
-- Load local BADAS-Open source and checkpoint directly.
-- Run BADAS risk inference on one dashcam video.
-- Produce a risk timeline.
-- Extract peak-risk timestamp.
-- Produce high-risk segments above a threshold.
-- Write JSON and CSV outputs when requested.
-
-Example command:
-
-```bash
-python scripts/inference_badas.py \
-  --video data/nexar_collision_prediction/train/positive/00024.mp4 \
-  --output-json outputs/badas_positive_00024.json \
-  --output-csv outputs/badas_positive_00024.csv \
-  --window-stride 16 \
-  --device auto
-```
-
-Important arguments:
-
-```text
---video          input mp4 path
---model-dir      BADAS-Open model directory, default models/BADAS-Open
---output-json    optional structured JSON output
---output-csv     optional timestamp/risk_score timeline CSV
---device         auto, cpu, cuda, or mps
---threshold      high-risk threshold, default 0.8
---target-fps     sampling rate, default 8.0
---frame-count    BADAS window size, default 16 frames
---window-stride  sliding-window stride in sampled frames
-```
-
-Model interpretation:
-
-```text
-target_fps = 8 fps
-frame_count = 16 frames
-16 frames / 8 fps = 2 seconds per BADAS window
-```
-
-The model output is binary:
-
-```text
-safe
 collision_or_near_miss
 ```
 
-It does not directly output:
+They do not distinguish:
 
 ```text
-near_miss
-collision
+near_miss vs collision
 ```
 
-Example verified output on one Nexar positive video:
-
-```text
-video: data/nexar_collision_prediction/train/positive/00024.mp4
-predicted_label: collision_or_near_miss
-peak_risk_score: 0.992672
-peak_risk_time_sec: 20.0
-peak_risk_sampled_frame_idx: 160
-mean_risk_score: 0.481607
-```
-
-Because sampling is 8 fps:
-
-```text
-160 sampled frames / 8 fps = 20.0 seconds
-```
-
-## 7. Event-Centred Clip Extraction
-
-Implemented script:
-
-```text
-scripts/create_event_clips.py
-```
-
-Purpose:
-
-- Read Nexar metadata.
-- Use `time_of_event` as event centre for positive videos.
-- Cut fixed-length event-centred clips.
-- Generate a manifest for annotation and training.
-
-Default input:
-
-```text
-data/nexar_collision_prediction/train/positive/metadata.csv
-data/nexar_collision_prediction/train/positive/*.mp4
-```
-
-Default output:
-
-```text
-data/processed/event_clips/nexar/train/positive/
-```
-
-Default manifest:
-
-```text
-data/processed/clip_manifests/nexar_train_positive_event_clips.csv
-```
-
-Default command:
-
-```bash
-python scripts/create_event_clips.py
-```
-
-This processes all rows in:
-
-```text
-data/nexar_collision_prediction/train/positive/metadata.csv
-```
-
-Useful test command:
-
-```bash
-python scripts/create_event_clips.py --limit 5
-```
-
-Overwrite existing clips:
-
-```bash
-python scripts/create_event_clips.py --overwrite
-```
-
-Use `time_of_alert` instead of `time_of_event`:
-
-```bash
-python scripts/create_event_clips.py --center-field time_of_alert
-```
-
-Dry run without running ffmpeg:
-
-```bash
-python scripts/create_event_clips.py --dry-run
-```
-
-Current extraction rule:
-
-```text
-clip_start_time = time_of_event - 5 seconds
-clip_end_time = time_of_event + 5 seconds
-clip_duration = 10 seconds
-```
-
-Boundary handling:
-
-- If the desired start time is before video start, the clip starts at 0.
-- If the desired end time would exceed video duration, the clip is shifted earlier where possible.
-- `center_offset_in_clip` records where the event centre appears inside the extracted clip.
-
-Encoding:
-
-```text
-video codec: libx264
-preset: veryfast
-crf: 18
-audio: removed
-```
-
-Optional faster but less frame-accurate mode:
-
-```bash
-python scripts/create_event_clips.py --copy-video
-```
-
-Practical note:
-
-- Nexar videos checked locally do not contain an audio stream.
-- The script removes audio with `-an`, but this does not currently discard useful Nexar signal because the source videos are video-only.
-
-## 8. Generated Clip Manifest
-
-Generated manifest:
-
-```text
-data/processed/clip_manifests/nexar_train_positive_event_clips.csv
-```
-
-Current local generation result:
-
-```text
-Manifest rows: 750
-Created clips: 747
-Existing clips: 3
-Skipped rows: 0
-Failed rows: 0
-```
-
-The three existing clips came from earlier test runs. Total local clip count after full generation:
-
-```text
-750 positive event-centred clips
-```
-
-Approximate local size:
-
-```text
-data/processed/event_clips/nexar/train/positive/ = about 4.5 GB
-```
-
-The manifest is tracked in git, but the actual clips are not.
-
-Important manifest columns:
-
-```text
-clip_id
-source_dataset
-split
-source_label_folder
-source_binary_label
-core_label
-source_file_name
-source_video_path
-clip_path
-event_center_time
-video_duration
-clip_start_time
-clip_end_time
-clip_duration
-center_offset_in_clip
-time_of_event
-time_of_alert
-light_conditions
-weather
-scene
-status
-error
-```
-
-For positive Nexar samples:
-
-```text
-source_binary_label = collision_or_near_miss
-core_label = needs_review
-```
-
-This was the original generated state. The current annotated CSV now has an additional human label column:
+So the team manually labelled the positive clips. Labels were stored in a CSV column named:
 
 ```text
 manual_label
 ```
 
-Current status:
+After several review passes:
+
+- `not_sure` labels were removed or resolved.
+- Visibly bad/unclear videos were removed from the final fixed split.
+- The final reproducible split uses 744 samples.
+
+Final fixed split:
 
 ```text
-clip_id column restored and present for all 750 rows
-750 / 750 train positive clips manually labelled
-human label source column = manual_label
-legacy/default training label column = core_label
-collision labels = 337
-near_miss labels = 413
-not_sure / ambiguous labels = 0
+splits/processed_744/train.csv        595 rows
+splits/processed_744/train_inner.csv  476 rows
+splits/processed_744/val.csv          119 rows
+splits/processed_744/test.csv         149 rows
 ```
 
-The training code can use a different label column, but the column choice must be explicit. The current default manifest is training-ready with `--label-column manual_label`; no `--clip-id-column` override is needed.
-
-## 9. Annotation Status
-
-The positive clip annotation pass is complete.
-
-Current annotation source:
+Class counts:
 
 ```text
-CSV containing all 750 Nexar train positive clips
-label column: manual_label
-current cleaned distribution: 337 collision, 413 near_miss
+train:        collision=280, near_miss=315
+train_inner:  collision=224, near_miss=252
+val:          collision=56,  near_miss=63
+test:         collision=70,  near_miss=79
 ```
 
-Allowed final labels for Nexar positive clips:
+Label encoding:
 
 ```text
-near_miss
-collision
+0 = near_miss
+1 = collision
 ```
 
-The legacy `core_label` column may still contain:
+Important raw/processed video paths expected by the full rebuild flow:
 
 ```text
-needs_review
+data/nexar_collision_prediction/train/positive/*.mp4
+data/nexar_collision_prediction/test/positive/*.mp4
+data/processed_positive/processed/event_clips/nexar/train/positive/*.mp4
+data/processed_positive/processed/event_clips/nexar/test/positive/*.mp4
 ```
 
-Do not assume `core_label` is the current human-reviewed label unless it has been explicitly synchronized from `manual_label`.
+Fast reproduction does not need raw `.mp4` files if the precomputed feature assets are present.
 
-Label definitions:
+## 4. Final Method
 
-- `collision`: physical contact happens between the ego vehicle and another actor/object, or the event clearly includes a crash involving the ego vehicle.
-- `near_miss`: no physical contact, but an imminent collision is avoided through braking, swerving, stopping, or another emergency manoeuvre.
-- `needs_review`: not yet labelled or ambiguous.
+The final model is not a single end-to-end neural network. It is a reproducible feature-fusion and rescue pipeline.
 
-Training-ready options:
+### 4.1 Camera Motion and Wavelet Features
 
-1. Use the annotated manifest directly:
-
-```bash
-python -u scripts/train_badas_outcome_head.py \
-  --label-column manual_label \
-  --device mps \
-  --epochs 50 \
-  --batch-size 32 \
-  --output-dir outputs/outcome_head
-```
-
-2. Or create a training label CSV with this schema and use it through `--labels-csv`:
+Location:
 
 ```text
-clip_id,core_label
-nexar_train_positive_00024,collision
-nexar_train_positive_00072,near_miss
-```
-
-The second option works with the script defaults because `core_label` already exists in the original manifest and labels from `--labels-csv` override manifest labels.
-
-If files are moved into class folders later, a future sync script should update the manifest so that training still uses one clean metadata source.
-
-## 10. BADAS Window-Level Feature Extraction
-
-Implemented script:
-
-```text
-scripts/extract_badas_window_features.py
+collision_contact_full_repro/collision_contact/extract_features.py
+collision_contact_full_repro/collision_contact/motion_extract.py
+collision_contact_full_repro/collision_contact/wavelet_features.py
 ```
 
 Purpose:
 
-- Load BADAS-Open and the frozen V-JEPA2 backbone.
-- Run the processed 10-second clips through BADAS sliding windows.
-- Extract the classifier-input window embedding from BADAS before the original binary risk classifier.
-- Save reusable `.npz` files for training a lightweight near-miss/collision outcome head.
-- Save BADAS risk scores and timestamp alignment for each window.
+- Estimate global camera motion between adjacent frames.
+- Extract motion channels such as displacement, residuals, velocity, acceleration, jerk, fit error, and shake energy.
+- Use continuous and stationary wavelet transforms to represent short transient vibration/contact patterns.
 
-Default inputs:
+Key output:
 
 ```text
-data/processed/clip_manifests/nexar_train_positive_event_clips.csv
-data/processed/event_clips/nexar/train/positive/*.mp4
+outputs/processed_744/features/
 ```
 
-Default output directory:
+This directory contains:
 
 ```text
-outputs/features/
+744 .npz feature files
+744 _motion.csv files
 ```
 
-Default command:
+### 4.2 Object Residual Physics
 
-```bash
-python -u scripts/extract_badas_window_features.py --offline --device auto
-```
-
-Recommended Apple Silicon command:
-
-```bash
-python -u scripts/extract_badas_window_features.py \
-  --device mps \
-  --offline \
-  --window-batch-size 3
-```
-
-Important arguments:
+Location:
 
 ```text
---target-fps          default 8.0
---frame-count         default 16
---window-stride       default 8
---window-batch-size   controls extraction speed/memory only; it does not change saved feature content
---limit               useful for pilot extraction
---offline             forces Hugging Face libraries to use local cache
-```
-
-Feature interpretation for the current defaults:
-
-```text
-10-second clip
-target_fps = 8 fps
-about 80 sampled frames
-frame_count = 16 sampled frames = 2 seconds
-window_stride = 8 sampled frames = 1 second
-expected windows per clip = 9
-feature shape per clip = [9, 1024]
-```
-
-Each `.npz` contains:
-
-```text
-features              float32, shape [num_windows, 1024]
-risk_scores           float32, shape [num_windows]
-logits                float32, shape [num_windows, 2]
-window_start_sec      float32, shape [num_windows]
-window_end_sec        float32, shape [num_windows]
-target_time_sec       float32, shape [num_windows]
-metadata              JSON string
-```
-
-Current verified local extraction state:
-
-```text
-feature_dir: outputs/features/
-feature files for Nexar train positive clips: 750 / 750
-standard num_windows per 10-second clip: 9
-feature_dim: 1024
-features_finite: True
-risk_finite: True
-npz_reload_check: ok
-```
-
-The full 750 positive clip feature extraction has now been completed locally. Re-running the extraction should not be necessary unless clips are regenerated, feature settings change, files are missing, or `--overwrite` is intentionally used.
-
-The script writes one `.npz` per clip and skips existing files unless `--overwrite` is provided, so interrupted or partial future runs can still be resumed.
-
-## 11. Conditional Near-Miss/Collision Outcome Head
-
-Implemented script:
-
-```text
-scripts/train_badas_outcome_head.py
+collision_contact_full_repro/collision_contact/extract_object_residual_physics_features.py
+collision_contact_full_repro/collision_contact/export_object_metrics.py
 ```
 
 Purpose:
 
-- Read cached BADAS window feature `.npz` files.
-- Read human labels from the manifest or an optional separate labels CSV.
-- Use only rows labelled:
+- Use YOLO object detections around the event.
+- Compute object residual/energy/shift metrics that correlate with physical contact.
+- Export compact tabular metrics used by the final model.
+
+Key outputs:
 
 ```text
-near_miss
-collision
+analysis/impact_diagnostics_20260522/object_physics_train_metrics.csv
+analysis/impact_diagnostics_20260522/object_physics_test_metrics.csv
 ```
 
-- Skip rows labelled:
+### 4.3 CoTracker Object Dynamics
+
+Location:
 
 ```text
-needs_review
-ambiguous
-safe
+collision_contact_full_repro/collision_contact/extract_object_cotracker_dynamics_features.py
 ```
 
-- Train a lightweight conditional classifier:
+Purpose:
+
+- Use YOLOv8s to choose object regions.
+- Use CoTracker to track object points around the event.
+- Summarize object dynamics over 32 frames at width 384.
+
+Key output:
 
 ```text
-q = P(collision | risky)
+outputs/processed_744/object_cotracker_dynamics_yolov8s_32f_w384_20260524/
 ```
 
-This keeps the BADAS risk model frozen and separates:
+This directory contains:
 
 ```text
-P(risky)
+744 .npz feature files
+manifest.json
 ```
 
-from:
+### 4.4 Released Long-Context Anchor
+
+Location:
 
 ```text
-P(collision | risky)
+assets/released_anchor/strong_fusion_probabilities.npz
+assets/released_anchor/long_context_oof_experts_summary.json
 ```
 
-At inference time, the intended probability composition is:
+Installed output:
 
 ```text
-P(safe) = 1 - P(risky)
-P(collision) = P(risky) * P(collision | risky)
-P(near_miss) = P(risky) * (1 - P(collision | risky))
+outputs/processed_744_long_context_anchor/
 ```
 
-Current model architecture:
+Purpose:
+
+- Provide calibrated train/test probabilities from a stronger long-context model.
+- This anchor gives the final rescue fusion a stable baseline probability.
+- The final reported result uses this released anchor, not a newly retrained anchor.
+
+Important caveat:
 
 ```text
-window features [T, 1024]
-+ risk score
-+ relative time
-        |
-linear projection
-        |
-2-layer 1D temporal convolution
-        |
-mean pooling + max pooling
-        |
-small MLP
-        |
-collision logit
+Long-context features use a wider source-video context, so this is an offline/post-event classification setting, not a pre-event crash prediction model.
 ```
 
-Default training command if the manifest already has final labels in `core_label`:
+### 4.5 Final Rescue Fusion
+
+Location:
+
+```text
+collision_contact_full_repro/collision_contact/train_val_selected_deep_rescue.py
+```
+
+Training command:
 
 ```bash
-python -u scripts/train_badas_outcome_head.py \
-  --device mps \
-  --epochs 50 \
-  --batch-size 32 \
-  --output-dir outputs/outcome_head
+PYTHON=.venv/bin/python bash scripts/run_03_train_model.sh
 ```
 
-Command for the current annotated manifest with `manual_label`:
+How selection works:
+
+- Build a 4063-dimensional feature vector.
+- Train candidate compact tabular models on `train_inner`.
+- Evaluate candidates on `val`.
+- Combine candidate probabilities with the released anchor using rescue/noisy-or/gated rules.
+- Select the best validation macro-F1 candidate whose threshold is constrained to `[0.45, 0.55]`.
+- Report final test metrics once on the fixed test split.
+
+Selected final candidate:
+
+```text
+lgbm_k512/rescue_q0.371/w2.50/fixed0p5
+```
+
+## 5. Reproduction Package
+
+Main folder:
+
+```text
+collision_contact_full_repro/
+```
+
+Required code/config folders:
+
+```text
+README.md
+requirements.txt
+collision_contact/
+scripts/
+configs/
+splits/
+assets/released_anchor/
+legacy/
+```
+
+Required precomputed feature/data artifacts for fast reproduction:
+
+```text
+outputs/processed_744/features/
+outputs/processed_744/object_cotracker_dynamics_yolov8s_32f_w384_20260524/
+analysis/impact_diagnostics_20260522/
+outputs/processed_744_long_context_anchor/
+```
+
+Final trained model/report artifacts:
+
+```text
+outputs/collision_contact_model/val_selected_deep_rescue_models.joblib
+outputs/collision_contact_model/val_selected_deep_rescue_summary.json
+outputs/collision_contact_model/val_selected_deep_rescue_predictions.json
+outputs/collision_contact_model/val_selected_deep_rescue_errors.json
+outputs/collision_contact_model/val_selected_deep_rescue_probabilities.npz
+```
+
+The full reproduction instructions are now documented in:
+
+```text
+collision_contact_full_repro/README.md
+```
+
+## 6. Minimal Reproduction Commands
+
+From inside `collision_contact_full_repro/`:
 
 ```bash
-python -u scripts/train_badas_outcome_head.py \
-  --label-column manual_label \
-  --device mps \
-  --epochs 50 \
-  --batch-size 32 \
-  --output-dir outputs/outcome_head
-```
-
-If annotators keep labels in a separate CSV, the easiest compatible format is:
-
-```text
-clip_id,core_label
-nexar_train_positive_00024,collision
-nexar_train_positive_00072,near_miss
-```
-
-Then train with:
-
-```bash
-python -u scripts/train_badas_outcome_head.py \
-  --labels-csv path/to/labels.csv \
-  --device mps \
-  --epochs 50 \
-  --batch-size 32 \
-  --output-dir outputs/outcome_head
-```
-
-Training outputs:
-
-```text
-outputs/outcome_head/best_outcome_head.pt
-outputs/outcome_head/training_history.csv
-outputs/outcome_head/train_val_test_split.csv
-outputs/outcome_head/val_predictions.csv
-outputs/outcome_head/test_predictions.csv
-outputs/outcome_head/final_metrics.json
-outputs/outcome_head/training_config.json
-```
-
-Default split:
-
-```text
-train = 70%
-validation = 15%
-test = 15%
-```
-
-The split is stratified by `near_miss` and `collision`. Validation is used for early stopping and model selection. Test should be treated as the final internal evaluation split and should not be used for repeated threshold or architecture tuning.
-
-Current status:
-
-- Manual labels for all 750 train positive clips are now available in `manual_label`.
-- Label values have been cleaned through multiple hard-case review passes: 337 `collision`, 413 `near_miss`, 0 `not_sure`.
-- The manifest has a valid `clip_id` column for all 750 rows.
-- Cached BADAS window features for all 750 train positive clips are now available.
-- Formal real-label training has been run on the cleaned labels.
-- Current best baseline is `manual_label_fixed04_*_mps` / `manual_label_fixed05_*_mps`; these two runs produced identical results because the effective label set did not change between them.
-
-Current baseline command pattern:
-
-```bash
-for seed in 1 2 3 4 5 42 2014 917 517; do
-  python -u scripts/train_badas_outcome_head.py \
-    --label-column manual_label \
-    --device mps \
-    --seed "$seed" \
-    --epochs 50 \
-    --batch-size 32 \
-    --output-dir "outputs/outcome_head/manual_label_fixed05_seed${seed}_mps"
-done
-```
-
-Current 9-seed baseline result with threshold `0.5`:
-
-```text
-test AP        = 0.857 +/- 0.042
-test AUROC     = 0.879 +/- 0.028
-test accuracy  = 0.808 +/- 0.035
-test precision = 0.790 +/- 0.070
-test recall    = 0.795 +/- 0.054
-test F1        = 0.790 +/- 0.033
-```
-
-Validation-selected thresholds did not materially improve the result:
-
-```text
-threshold 0.5 test F1          = 0.790 +/- 0.033
-validation-selected test F1    = 0.790 +/- 0.031
-```
-
-Interpretation:
-
-- The outcome head is a meaningful and stable baseline for `near_miss` vs `collision`.
-- The model is not random: AUROC is about `0.88` and F1 is about `0.79` across seeds.
-- The remaining failure mode is semantic: BADAS frozen features capture risk severity well, but they do not always capture the fine-grained visual evidence of physical contact.
-- Very collision-like near misses are still often predicted as `collision`.
-- Some visually subtle collisions are still predicted as `near_miss`.
-
-## 12. What Is Not Done Yet
-
-### Safe Clip Extraction
-
-Only Nexar positive event-centred clips have been generated so far.
-
-Safe/negative clips still need to be generated from:
-
-```text
-data/nexar_collision_prediction/train/negative/
-```
-
-Because negative samples do not have `time_of_event`, a separate rule is needed, such as:
-
-- middle 10 seconds
-- random 10-second crop
-- multiple random crops per video
-- lowest-risk 10-second region based on BADAS, if we want harder safe samples
-
-### Label Column Selection
-
-Manual relabelling is complete. The current human-reviewed label column differs from the earlier script default:
-
-```text
-current annotated CSV: manual_label
-default training label column: core_label
-```
-
-Before formal outcome-head training, use:
-
-```bash
---label-column manual_label
-```
-
-No `--clip-id-column` override is needed now that the manifest has a normal `clip_id` column.
-
-### Positive Outcome Head Baseline
-
-The conditional `near_miss` vs `collision` outcome head has been formally trained and evaluated on real manual labels.
-
-Current effective label version:
-
-```text
-manual_label_fixed04 / manual_label_fixed05
-```
-
-`fixed05` produced the same metrics as `fixed04`; the effective manifest labels were unchanged.
-
-Current label distribution:
-
-```text
-collision = 337
-near_miss = 413
-total = 750
-```
-
-Current 9-seed test result at threshold `0.5`:
-
-```text
-test AP        = 0.857 +/- 0.042
-test AUROC     = 0.879 +/- 0.028
-test accuracy  = 0.808 +/- 0.035
-test precision = 0.790 +/- 0.070
-test recall    = 0.795 +/- 0.054
-test F1        = 0.790 +/- 0.033
-```
-
-This is the current baseline to report. It is useful, stable, and clearly above a majority-class baseline, but it is not a final robust contact detector.
-
-Current high-confidence repeated error examples:
-
-```text
-collision -> near_miss:
-00180, 00466, 00423, 00818, 00117, 00210, 00383
-
-near_miss -> collision:
-00882, 01031, 00758, 01000, 00556, 00927, 00986
-```
-
-These examples should be treated as a hard-case evaluation set. If their labels are confirmed, the next improvement likely requires a finer physical-contact verifier rather than only retuning the current BADAS-feature head.
-
-### Three-Class Model Training
-
-The conditional positive-outcome head is implemented and has a real-label baseline. The full three-class system is not complete yet.
-
-Target classes:
-
-```text
-safe
-near_miss
-collision
-```
-
-Possible implementation options:
-
-1. Use BADAS/V-JEPA features and train the new conditional outcome head.
-2. Fine-tune the BADAS-based model with a three-class output head.
-3. Train a separate video classifier on the generated 10-second clips.
-
-Recommended first step:
-
-- Treat `manual_label_fixed04/fixed05` as the current positive-outcome baseline.
-- Report 9-seed mean/std instead of a single seed.
-- Keep threshold `0.5` as the baseline threshold unless a later validation protocol improves it.
-- Use the repeated-error clips as a hard-case set for qualitative review.
-- Add safe clips later to complete the full `safe`, `near_miss`, `collision` pipeline.
-
-### Qwen3-VL Semantic Tagging
-
-Qwen3-VL integration is not implemented yet.
-
-Planned input:
-
-```text
-BADAS-extracted or event-centred 10-second clip
-```
-
-Planned output JSON fields:
-
-```text
-actor_type
-scenario_type
-road_type
-weather
-avoidance_behavior
-collision_geometry
-near_miss_type
-short_summary
-```
-
-Initial recommendation:
-
-- Start with prompt-based zero-shot/few-shot inference.
-- Validate JSON strictly.
-- Manually review a subset.
-- Consider LoRA fine-tuning only after enough high-quality structured tags exist.
-
-## 13. Reproduction Steps for a New Team Member
-
-Clone the branch:
-
-```bash
-git clone -b ml-badas-preprocessing https://github.com/aaditya64/Driverless-Vehicle-Edgecase-Platform.git
-cd Driverless-Vehicle-Edgecase-Platform
-```
-
-Install Python dependencies:
-
-```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
 python -m pip install -r requirements.txt
 ```
 
-Install ffmpeg if missing:
+On macOS:
 
 ```bash
-brew install ffmpeg
+brew install libomp
 ```
 
-Download or place Nexar dataset at:
+Install released anchor:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/run_02_train_anchor.sh
+```
+
+Train final model:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/run_03_train_model.sh
+```
+
+Print report:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/run_04_report.sh
+```
+
+Expected output:
 
 ```text
-data/nexar_collision_prediction/
+selected=lgbm_k512/rescue_q0.371/w2.50/fixed0p5
+threshold=0.5
+val_accuracy=0.915966386555
+val_macro_f1=0.915674603175
+test_accuracy=0.939597315436
+test_auroc=0.964556962025
+test_confusion=[[75, 4], [5, 65]]
 ```
 
-Expected example:
+## 7. Full Feature Rebuild Commands
+
+Only run this if precomputed features are missing or must be regenerated.
+
+Install/check raw data and download model assets:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/run_00_check_and_prepare.sh
+```
+
+Full extraction:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/run_01_extract_features.sh
+```
+
+Apple Silicon lower-memory version:
+
+```bash
+COTRACKER_DEVICE=mps \
+DINO_BATCH=2 \
+RAFT_BATCH=1 \
+YOLO_BATCH=4 \
+BADAS_BATCH=1 \
+PYTHON=.venv/bin/python \
+bash scripts/run_01_extract_features.sh
+```
+
+Debug with a limit:
+
+```bash
+LIMIT=8 PYTHON=.venv/bin/python bash scripts/run_01_extract_features.sh
+```
+
+Important:
 
 ```text
-data/nexar_collision_prediction/train/positive/metadata.csv
-data/nexar_collision_prediction/train/positive/00024.mp4
-data/nexar_collision_prediction/train/negative/metadata.csv
+LIMIT mode is only for debugging. It does not generate full object metrics for final training.
 ```
 
-Download BADAS-Open:
+External model assets downloaded or cached during the full rebuild:
+
+```text
+nexar-ai/badas-open
+facebook/vjepa2-vitl-fpc16-256-ssv2
+vit_small_patch14_dinov2.lvd142m
+vit_small_patch16_dinov3
+MCG-NJU/videomae-base-finetuned-kinetics
+torchvision RAFT Small C_T_V2
+yolov8n.pt
+yolov8s.pt
+facebookresearch/co-tracker
+```
+
+Some are gated Hugging Face models, so a valid token may be required:
 
 ```bash
 huggingface-cli login
-python scripts/download_badas_open.py
+export HF_TOKEN=your_huggingface_token
 ```
 
-Generate Nexar positive event-centred clips:
+## 9. Full-Stack Integration Notes
 
-```bash
-python scripts/create_event_clips.py
-```
-
-Run BADAS inference on one video:
-
-```bash
-python scripts/inference_badas.py \
-  --video data/nexar_collision_prediction/train/positive/00024.mp4 \
-  --output-json outputs/badas_positive_00024.json \
-  --output-csv outputs/badas_positive_00024.csv \
-  --window-stride 16 \
-  --device auto
-```
-
-Extract cached BADAS window features:
-
-```bash
-python -u scripts/extract_badas_window_features.py \
-  --device auto \
-  --offline
-```
-
-For the current local state, the 750 positive clip features have already been extracted. Re-run this only to regenerate missing or changed feature files.
-
-Train the conditional outcome head from the annotated manifest:
-
-```bash
-python -u scripts/train_badas_outcome_head.py \
-  --label-column manual_label \
-  --device mps \
-  --epochs 50 \
-  --batch-size 32
-```
-
-If `manual_label` is later copied into `core_label`, the `--label-column` argument can be omitted.
-
-## 14. Known Issues and Practical Notes
-
-### Git Tracking
-
-The following are intentionally ignored:
+The current output that full-stack can consume immediately:
 
 ```text
-data/nexar_collision_prediction/
-data/processed/event_clips/
-models/
-outputs/
+outputs/collision_contact_model/val_selected_deep_rescue_predictions.json
 ```
 
-Do not commit raw videos or model weights to GitHub.
-
-### Local Paths
-
-The manifest uses repo-relative paths, for example:
+Each prediction entry contains:
 
 ```text
-data/nexar_collision_prediction/train/positive/00822.mp4
-data/processed/event_clips/nexar/train/positive/nexar_train_positive_00822.mp4
+idx
+path
+true_label
+prob_collision
+pred_label
+correct
 ```
 
-This allows other team members to reproduce the same structure locally.
-
-### BADAS Warning
-
-`albumentations` may print a warning about failing to fetch version info because of SSL certificate checks. This does not affect inference.
-
-Example:
+Label mapping:
 
 ```text
-albumentations/check_version.py: UserWarning: Error fetching version info
+pred_label=0 -> near_miss
+pred_label=1 -> collision
 ```
 
-### Device Selection
-
-`--device auto` chooses:
-
-1. CUDA if available
-2. Apple MPS if available
-3. CPU otherwise
-
-On Apple Silicon Macs, `mps` may be selected automatically.
-
-For some Python/PyTorch installations, Apple MPS may not be available even when the hardware supports Metal. A clean virtual environment with an official macOS arm64 PyTorch build fixed this locally:
-
-```bash
-python -m venv .venv-mps
-source .venv-mps/bin/activate
-python -m pip install -U pip
-python -m pip install torch torchvision
-python -m pip install -r requirements.txt
-python -c "import torch; print(torch.backends.mps.is_available())"
-```
-
-Expected output before using `--device mps`:
+Current limitation:
 
 ```text
-True
+There is no production-ready API service or single-video prediction CLI yet.
 ```
 
-Known working feature-extraction command inside this environment:
+To score a new uploaded video in the platform, we still need to build a wrapper that:
 
-```bash
-python -u scripts/extract_badas_window_features.py \
-  --device mps \
-  --offline \
-  --window-batch-size 3
+1. Cuts or receives the 10-second event-centered clip.
+2. Runs the same feature extraction stack.
+3. Builds the 4063-dimensional feature vector in the saved order.
+4. Loads `val_selected_deep_rescue_models.joblib`.
+5. Applies the selected rescue-fusion candidate and threshold.
+6. Returns `prob_collision`, `pred_label`, and supporting metadata.
+
+Until that wrapper exists, the current trained model is best treated as a reproducible research artifact plus fixed-split prediction output, not a deployed inference service.
+
+## 11. Other Dataset Work
+
+SAVeD / Saved AV dataset was also prepared earlier:
+
+```text
+AV_crash.csv rows: 1040
+AV_nearmiss.csv rows: 602
+downloaded source videos: 248 mp4 files
+generated event clips: 1606
+collision clips: 1020
+near_miss clips: 586
 ```
 
-### Runtime
+Current SAVeD status:
 
-Full positive clip extraction with `scripts/create_event_clips.py` processes 750 videos and may take several minutes.
+```text
+Prepared locally, but not used in the final 93.96% Nexar fixed-split result.
+```
 
-The local generated positive clip directory is several GB in size.
+Possible future uses:
 
-Full BADAS window feature extraction for 750 positive clips may take hours on a laptop because it runs the V-JEPA/BADAS model. This one-time cache-building step has now been completed for the 750 train positive clips. The resulting `.npz` files are small compared with the videos.
+- external validation,
+- additional training data,
+- hard-case mining,
+- semantic scenario tagging.
 
-## 15. Suggested Next Tasks
-
-1. Preserve and report the current positive-outcome baseline.
-   - Current human label column is `manual_label`.
-   - Current label counts: 337 `collision`, 413 `near_miss`.
-   - Report the `manual_label_fixed04/fixed05` 9-seed result: F1 about `0.790 +/- 0.033`, AUROC about `0.879 +/- 0.028`.
-   - Use threshold `0.5` as the baseline threshold.
-
-2. Review or formalize the hard-case set.
-   - `collision -> near_miss`: `00180`, `00466`, `00423`, `00818`, `00117`, `00210`, `00383`.
-   - `near_miss -> collision`: `00882`, `01031`, `00758`, `01000`, `00556`, `00927`, `00986`.
-   - Decide whether these labels are final or should be corrected.
-
-3. Verify the completed feature cache before future training.
-   - Expected positive feature files: 750.
-   - Expected feature shape per standard clip: `[9, 1024]`.
-   - Check for missing `.npz` files only if training reports missing features.
-
-4. Generate safe clips from Nexar negative videos.
-   - Add rows with `core_label=safe`.
-
-5. Create a combined training manifest.
-   - Include `safe`, `near_miss`, and `collision`.
-   - Split into train/validation/test.
-
-6. Add Qwen3-VL semantic tagging prototype.
-   - Prompt for strict JSON.
-   - Store tags in a structured output file.
-
-7. Connect ML outputs to the platform backend/search layer.
-   - Risk score
-   - Core label
-   - Event timestamp
-   - Semantic tags
-   - Summary
-
-## 16. Current Definition of Done for This Stage
+## 13. Definition of Done for Current Stage
 
 Completed:
 
-- BADAS-Open download helper script.
-- BADAS inference script.
-- Nexar positive event-centred clip extraction script.
-- Full local generation of 750 positive 10-second clips.
-- Generated positive clip manifest.
-- BADAS window-level feature extraction script.
-- Verified cached `.npz` feature format and reload checks.
-- Full local BADAS feature extraction for all 750 train positive clips.
-- Manual positive relabelling for all 750 train positive clips, stored in `manual_label`.
-- Cleaned label values after hard-case review: 337 `collision`, 413 `near_miss`, no `not_sure` labels remaining.
-- Restored normal `clip_id` column in the positive clip manifest.
-- Conditional `near_miss` vs `collision` outcome head training script.
-- Smoke-tested outcome head training, checkpoint writing, history writing, and validation prediction output.
-- Formal real-label positive-outcome baseline over 9 seeds.
-- Current baseline metrics: test F1 `0.790 +/- 0.033`, AUROC `0.879 +/- 0.028`, AP `0.857 +/- 0.042`, accuracy `0.808 +/- 0.035`.
-- Initial repeated-error hard-case set identified for collision-like near misses and subtle collisions.
-- Git branch with code, docs, README, requirements, and manifest.
-
-Not completed:
-
-- Safe clip generation.
-- Full three-class model assembly and evaluation.
-- Physical-contact verifier for hard near-miss/collision boundary cases.
-- Qwen3-VL tagging.
-- Backend integration of ML outputs.
+- Manual positive label cleanup.
+- Removal of unclear/bad clips from the final fixed set.
+- Fixed 744-sample train/val/test split.
+- BADAS conditional-head baseline.
+- Camera-motion and wavelet feature extraction.
+- Object residual physics feature extraction and metrics export.
+- CoTracker object-dynamics feature extraction.
+- Released long-context anchor installation.
+- Final LightGBM rescue-fusion training.
+- Reproduced final result exactly:
+  - test accuracy `0.939597315436`
+  - test AUROC `0.964556962025`
+  - test confusion `[[75, 4], [5, 65]]`
+- README updated with reproduction instructions for teammates.
+- Final model artifacts saved under `outputs/collision_contact_model/`.

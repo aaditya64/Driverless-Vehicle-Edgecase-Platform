@@ -50,6 +50,7 @@ class FeatureSample:
     feature_path: Path
     label: str
     target: float
+    group_id: str = ""
 
 
 class FeatureNormalizer:
@@ -211,6 +212,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, type=Path)
     parser.add_argument("--label-column", default="core_label")
     parser.add_argument("--clip-id-column", default="clip_id")
+    parser.add_argument(
+        "--group-column",
+        default=None,
+        help=(
+            "Optional manifest column used for group-aware train/val/test splits. "
+            "Rows with the same group value stay in the same split."
+        ),
+    )
     parser.add_argument("--train-fraction", default=0.70, type=float)
     parser.add_argument("--val-fraction", default=0.15, type=float)
     parser.add_argument("--test-fraction", default=0.15, type=float)
@@ -288,6 +297,38 @@ def read_labels(path: Path, clip_id_column: str, label_column: str) -> dict[str,
     return labels
 
 
+def read_manifest_labels_and_groups(
+    path: Path,
+    clip_id_column: str,
+    label_column: str,
+    group_column: str | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    path = path.expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Manifest does not exist: {path}")
+
+    labels: dict[str, str] = {}
+    groups: dict[str, str] = {}
+    with path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        if clip_id_column not in reader.fieldnames:
+            raise ValueError(f"Missing clip id column '{clip_id_column}' in {path}")
+        if label_column not in reader.fieldnames:
+            raise ValueError(f"Missing label column '{label_column}' in {path}")
+        if group_column is not None and group_column not in reader.fieldnames:
+            raise ValueError(f"Missing group column '{group_column}' in {path}")
+
+        for row in reader:
+            clip_id = str(row.get(clip_id_column, "")).strip()
+            if not clip_id:
+                continue
+            labels[clip_id] = normalize_label(row.get(label_column, ""))
+            group_id = str(row.get(group_column, "")).strip() if group_column else ""
+            groups[clip_id] = group_id or clip_id
+
+    return labels, groups
+
+
 def normalize_label(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -298,8 +339,14 @@ def build_samples(
     features_dir: Path,
     clip_id_column: str,
     label_column: str,
+    group_column: str | None = None,
 ) -> tuple[list[FeatureSample], dict[str, int]]:
-    labels = read_labels(manifest, clip_id_column, label_column)
+    labels, groups = read_manifest_labels_and_groups(
+        manifest,
+        clip_id_column,
+        label_column,
+        group_column,
+    )
     if labels_csv is not None:
         labels.update(read_labels(labels_csv, clip_id_column, label_column))
 
@@ -327,6 +374,7 @@ def build_samples(
                     feature_path=feature_path,
                     label=label,
                     target=LABEL_TO_TARGET[label],
+                    group_id=groups.get(clip_id, clip_id),
                 )
             )
         elif label in IGNORED_LABELS:
@@ -337,13 +385,11 @@ def build_samples(
     return samples, skipped
 
 
-def stratified_train_val_test_split(
-    samples: list[FeatureSample],
+def validate_split_fractions(
     train_fraction: float,
     val_fraction: float,
     test_fraction: float,
-    seed: int,
-) -> tuple[list[FeatureSample], list[FeatureSample], list[FeatureSample]]:
+) -> None:
     fractions = {
         "train": train_fraction,
         "val": val_fraction,
@@ -357,6 +403,8 @@ def stratified_train_val_test_split(
             f"Got {fractions} with sum={sum(fractions.values())}."
         )
 
+
+def validate_label_coverage(samples: list[FeatureSample]) -> dict[str, list[FeatureSample]]:
     by_label: dict[str, list[FeatureSample]] = {}
     for sample in samples:
         by_label.setdefault(sample.label, []).append(sample)
@@ -366,6 +414,18 @@ def stratified_train_val_test_split(
             "Training requires at least one near_miss and one collision sample. "
             f"Observed labels: {sorted(by_label)}"
         )
+    return by_label
+
+
+def stratified_train_val_test_split(
+    samples: list[FeatureSample],
+    train_fraction: float,
+    val_fraction: float,
+    test_fraction: float,
+    seed: int,
+) -> tuple[list[FeatureSample], list[FeatureSample], list[FeatureSample]]:
+    validate_split_fractions(train_fraction, val_fraction, test_fraction)
+    by_label = validate_label_coverage(samples)
 
     rng = random.Random(seed)
     train_samples = []
@@ -396,6 +456,98 @@ def stratified_train_val_test_split(
     rng.shuffle(val_samples)
     rng.shuffle(test_samples)
     return train_samples, val_samples, test_samples
+
+
+def group_label_counts(samples: list[FeatureSample]) -> dict[str, int]:
+    return {
+        label: sum(1 for sample in samples if sample.label == label)
+        for label in LABEL_TO_TARGET
+    }
+
+
+def group_aware_train_val_test_split(
+    samples: list[FeatureSample],
+    train_fraction: float,
+    val_fraction: float,
+    test_fraction: float,
+    seed: int,
+) -> tuple[list[FeatureSample], list[FeatureSample], list[FeatureSample]]:
+    validate_split_fractions(train_fraction, val_fraction, test_fraction)
+    validate_label_coverage(samples)
+
+    fractions = {
+        "train": train_fraction,
+        "val": val_fraction,
+        "test": test_fraction,
+    }
+    total_label_counts = group_label_counts(samples)
+    target_label_counts = {
+        split: {
+            label: total_label_counts[label] * fraction
+            for label in LABEL_TO_TARGET
+        }
+        for split, fraction in fractions.items()
+    }
+    target_total_counts = {
+        split: len(samples) * fraction
+        for split, fraction in fractions.items()
+    }
+
+    groups_by_id: dict[str, list[FeatureSample]] = {}
+    for sample in samples:
+        groups_by_id.setdefault(sample.group_id or sample.clip_id, []).append(sample)
+
+    rng = random.Random(seed)
+    groups = list(groups_by_id.values())
+    rng.shuffle(groups)
+    groups.sort(key=len, reverse=True)
+
+    split_samples: dict[str, list[FeatureSample]] = {
+        "train": [],
+        "val": [],
+        "test": [],
+    }
+
+    def score_split(split: str, group: list[FeatureSample]) -> float:
+        score = 0.0
+        group_counts = group_label_counts(group)
+        for split_name, current_samples in split_samples.items():
+            candidate_size = len(current_samples)
+            if split_name == split:
+                candidate_size += len(group)
+
+            target_size = target_total_counts[split_name]
+            size_error = abs(candidate_size - target_size) / max(1.0, target_size)
+            score += 0.25 * size_error
+
+            if candidate_size > target_size:
+                score += (candidate_size - target_size) / max(1.0, target_size)
+
+            current_label_counts = group_label_counts(current_samples)
+            for label, target in target_label_counts[split_name].items():
+                candidate_label_count = current_label_counts[label]
+                if split_name == split:
+                    candidate_label_count += group_counts[label]
+                score += abs(candidate_label_count - target) / max(1.0, target)
+
+        return score
+
+    for group in groups:
+        split = min(("train", "val", "test"), key=lambda name: score_split(name, group))
+        split_samples[split].extend(group)
+
+    for split_name, split_group in split_samples.items():
+        labels = {sample.label for sample in split_group}
+        if labels != set(LABEL_TO_TARGET):
+            raise ValueError(
+                f"Group-aware split produced split '{split_name}' with labels "
+                f"{sorted(labels)}. Try a different seed or use more data."
+            )
+
+    for split_group in split_samples.values():
+        rng.shuffle(split_group)
+
+    return split_samples["train"], split_samples["val"], split_samples["test"]
 
 
 def make_pos_weight(samples: list[FeatureSample], pos_weight_arg: str, device: torch.device) -> torch.Tensor | None:
@@ -593,6 +745,7 @@ def main() -> int:
         features_dir=args.features_dir,
         clip_id_column=args.clip_id_column,
         label_column=args.label_column,
+        group_column=args.group_column,
     )
 
     label_counts = {
@@ -609,7 +762,12 @@ def main() -> int:
             "`near_miss` and `collision` rows in the manifest or --labels-csv."
         )
 
-    train_samples, val_samples, test_samples = stratified_train_val_test_split(
+    split_fn = (
+        group_aware_train_val_test_split
+        if args.group_column
+        else stratified_train_val_test_split
+    )
+    train_samples, val_samples, test_samples = split_fn(
         samples,
         args.train_fraction,
         args.val_fraction,
@@ -753,7 +911,9 @@ def main() -> int:
             for sample in test_samples
         ]
     )
-    write_csv(output_dir / "train_val_test_split.csv", split_rows, ["split", "clip_id", "label"])
+    for row, sample in zip(split_rows, train_samples + val_samples + test_samples):
+        row["group_id"] = sample.group_id
+    write_csv(output_dir / "train_val_test_split.csv", split_rows, ["split", "clip_id", "label", "group_id"])
 
     checkpoint = torch.load(best_path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -794,6 +954,7 @@ def main() -> int:
         "usable_samples": len(samples),
         "label_counts": label_counts,
         "skipped": skipped,
+        "group_column": args.group_column,
         "train_samples": len(train_samples),
         "val_samples": len(val_samples),
         "test_samples": len(test_samples),
