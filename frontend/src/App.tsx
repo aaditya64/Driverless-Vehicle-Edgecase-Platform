@@ -1,18 +1,21 @@
-import { useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import Layout from './components/Layout'
 import IncidentList from './pages/IncidentList'
 import UploadIncident from './pages/UploadIncident'
+import IncidentDetail from './pages/IncidentDetail'
+import './styles/app.css'
 
 export default function App() {
-  const [page, setPage] = useState<'list' | 'upload'>('list')
-
   return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto', padding: '24px' }}>
-      <nav style={{ marginBottom: '24px' }}>
-        <button onClick={() => setPage('list')} style={{ marginRight: '12px' }}>Incident List</button>
-        <button onClick={() => setPage('upload')}>Upload Incident</button>
-      </nav>
-      {page === 'list' && <IncidentList />}
-      {page === 'upload' && <UploadIncident />}
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route index element={<IncidentList />} />
+          <Route path="upload" element={<UploadIncident />} />
+          <Route path="incidents/:id" element={<IncidentDetail />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   )
 }
