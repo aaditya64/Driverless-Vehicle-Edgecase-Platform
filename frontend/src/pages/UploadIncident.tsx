@@ -2,13 +2,16 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { createIncident } from '../api/incidents'
 import VideoDropzone from '../components/VideoDropzone'
+import LocationPicker from '../components/LocationPicker'
+import ContextTagInput from '../components/ContextTagInput'
 
 export default function UploadIncident() {
   const navigate = useNavigate()
   const [file, setFile] = useState<File | null>(null)
   const [narrative, setNarrative] = useState('')
-  const [lat, setLat] = useState('')
-  const [lng, setLng] = useState('')
+  const [lat, setLat] = useState<number | null>(null)
+  const [lng, setLng] = useState<number | null>(null)
+  const [contextTags, setContextTags] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -22,8 +25,11 @@ export default function UploadIncident() {
     const formData = new FormData()
     formData.append('video_file', file)
     if (narrative.trim()) formData.append('narrative', narrative.trim())
-    if (lat) formData.append('location_lat', lat)
-    if (lng) formData.append('location_lng', lng)
+    if (lat != null) formData.append('location_lat', String(lat))
+    if (lng != null) formData.append('location_lng', String(lng))
+    if (contextTags.length > 0) {
+      formData.append('context_tags', JSON.stringify(contextTags))
+    }
 
     setSubmitting(true)
     setError(null)
@@ -43,7 +49,8 @@ export default function UploadIncident() {
         <div>
           <h1>Upload incident</h1>
           <p className="text-muted">
-            Submit a dashcam video with optional location and narrative context.
+            Drag-and-drop a dashcam video with optional location pin, narrative, and context
+            tags.
           </p>
         </div>
       </div>
@@ -63,6 +70,19 @@ export default function UploadIncident() {
               onChange={(e) => setNarrative(e.target.value)}
             />
           </div>
+
+          <ContextTagInput tags={contextTags} onChange={setContextTags} />
+        </div>
+
+        <div className="card form-section">
+          <LocationPicker
+            lat={lat}
+            lng={lng}
+            onChange={(newLat, newLng) => {
+              setLat(newLat)
+              setLng(newLng)
+            }}
+          />
           <div className="form-row form-row-split">
             <div>
               <label htmlFor="lat">Latitude</label>
@@ -71,8 +91,8 @@ export default function UploadIncident() {
                 type="number"
                 step="any"
                 placeholder="51.5074"
-                value={lat}
-                onChange={(e) => setLat(e.target.value)}
+                value={lat ?? ''}
+                onChange={(e) => setLat(e.target.value ? parseFloat(e.target.value) : null)}
               />
             </div>
             <div>
@@ -82,14 +102,11 @@ export default function UploadIncident() {
                 type="number"
                 step="any"
                 placeholder="-0.1278"
-                value={lng}
-                onChange={(e) => setLng(e.target.value)}
+                value={lng ?? ''}
+                onChange={(e) => setLng(e.target.value ? parseFloat(e.target.value) : null)}
               />
             </div>
           </div>
-          <p className="text-muted form-hint">
-            Map pin selection will be added in a later step; enter coordinates manually for now.
-          </p>
         </div>
 
         {error && <p className="form-error">{error}</p>}

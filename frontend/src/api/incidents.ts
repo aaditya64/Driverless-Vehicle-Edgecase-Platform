@@ -3,11 +3,18 @@ import type {
   IncidentDetail,
   IncidentSummary,
   LabelOverridePayload,
+  TagOverridePayload,
 } from '../types/incident'
 
 export interface ListIncidentsParams {
   label?: string
   status?: string
+  q?: string
+  date_from?: string
+  date_to?: string
+  tag_type?: string
+  tag_value?: string
+  has_location?: boolean
   order?: 'asc' | 'desc'
 }
 
@@ -37,4 +44,11 @@ export async function overrideLabel(
   payload: LabelOverridePayload,
 ): Promise<void> {
   await api.patch(`/incidents/${incidentId}/labels`, payload)
+}
+
+export async function overrideTags(
+  incidentId: string,
+  payload: TagOverridePayload,
+): Promise<void> {
+  await api.patch(`/incidents/${incidentId}/tags`, payload)
 }

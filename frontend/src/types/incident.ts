@@ -20,10 +20,10 @@ export interface IncidentSummary {
   location_lng: number | null
   uploaded_at: string
   label: IncidentLabel | null
+  tags: IncidentTag[]
 }
 
 export interface IncidentDetail extends IncidentSummary {
-  tags?: IncidentTag[]
   summary?: string | null
   risk_timeline?: number[] | null
   video_url?: string
@@ -31,5 +31,10 @@ export interface IncidentDetail extends IncidentSummary {
 
 export interface LabelOverridePayload {
   value: ClassificationLabel
+  changed_by: string
+}
+
+export interface TagOverridePayload {
+  tags: IncidentTag[]
   changed_by: string
 }

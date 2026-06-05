@@ -4,88 +4,59 @@ import { listIncidents } from '../api/incidents'
 import type { IncidentSummary } from '../types/incident'
 import StatusBadge from '../components/StatusBadge'
 import LabelBadge from '../components/LabelBadge'
+import IncidentFilters, {
+  DEFAULT_FILTERS,
+  filtersToParams,
+  type IncidentFilterState,
+} from '../components/IncidentFilters'
+import { usePolling } from '../hooks/usePolling'
 
 export default function IncidentList() {
   const [incidents, setIncidents] = useState<IncidentSummary[]>([])
+  const [filters, setFilters] = useState<IncidentFilterState>(DEFAULT_FILTERS)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState('')
-  const [labelFilter, setLabelFilter] = useState('')
-  const [order, setOrder] = useState<'asc' | 'desc'>('desc')
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     setError(null)
     try {
-      const data = await listIncidents({
-        status: statusFilter || undefined,
-        label: labelFilter || undefined,
-        order,
-      })
+      const data = await listIncidents(filtersToParams(filters))
       setIncidents(data)
     } catch {
       setError('Could not load incidents. Is the API running?')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
-  }, [statusFilter, labelFilter, order])
+  }, [filters])
 
   useEffect(() => {
     load()
   }, [load])
+
+  const hasActiveProcessing = incidents.some(
+    (i) => i.status === 'waiting' || i.status === 'processing',
+  )
+  usePolling(() => load(true), 5000, hasActiveProcessing)
 
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1>Incidents</h1>
-          <p className="text-muted">Search and review analysed dashcam events.</p>
+          <p className="text-muted">
+            Queryable incident database — search, filter, and sort records.
+            {hasActiveProcessing && (
+              <span className="polling-indicator"> · Auto-refreshing status</span>
+            )}
+          </p>
         </div>
         <Link to="/upload" className="btn btn-primary">
           Upload video
         </Link>
       </div>
 
-      <div className="filters card">
-        <div className="filter-group">
-          <label htmlFor="filter-status">Status</label>
-          <select
-            id="filter-status"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            <option value="">All</option>
-            <option value="waiting">Waiting</option>
-            <option value="processing">Processing</option>
-            <option value="completed">Completed</option>
-            <option value="failed">Failed</option>
-          </select>
-        </div>
-        <div className="filter-group">
-          <label htmlFor="filter-label">Classification</label>
-          <select
-            id="filter-label"
-            value={labelFilter}
-            onChange={(e) => setLabelFilter(e.target.value)}
-          >
-            <option value="">All</option>
-            <option value="safe">Safe</option>
-            <option value="near_miss">Near miss</option>
-            <option value="collision">Collision</option>
-          </select>
-        </div>
-        <div className="filter-group">
-          <label htmlFor="filter-order">Sort by date</label>
-          <select
-            id="filter-order"
-            value={order}
-            onChange={(e) => setOrder(e.target.value as 'asc' | 'desc')}
-          >
-            <option value="desc">Newest first</option>
-            <option value="asc">Oldest first</option>
-          </select>
-        </div>
-      </div>
+      <IncidentFilters filters={filters} onChange={setFilters} />
 
       {loading && <p className="text-muted">Loading…</p>}
       {error && <p className="form-error">{error}</p>}
@@ -104,6 +75,7 @@ export default function IncidentList() {
                 <th>Uploaded</th>
                 <th>Status</th>
                 <th>Classification</th>
+                <th>Tags</th>
                 <th>Narrative</th>
                 <th>Location</th>
                 <th />
@@ -121,6 +93,19 @@ export default function IncidentList() {
                       value={i.label?.value}
                       source={i.label?.source}
                     />
+                  </td>
+                  <td className="tags-cell">
+                    {i.tags?.length ? (
+                      <span className="tags-cell-preview">
+                        {i.tags
+                          .slice(0, 2)
+                          .map((t) => t.tag_value)
+                          .join(', ')}
+                        {i.tags.length > 2 ? ` +${i.tags.length - 2}` : ''}
+                      </span>
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
                   </td>
                   <td className="narrative-cell">
                     {i.narrative ? (

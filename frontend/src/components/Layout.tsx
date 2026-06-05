@@ -12,6 +12,9 @@ export default function Layout() {
             <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
               Incidents
             </NavLink>
+            <NavLink to="/map" className={({ isActive }) => (isActive ? 'active' : '')}>
+              Map
+            </NavLink>
             <NavLink to="/upload" className={({ isActive }) => (isActive ? 'active' : '')}>
               Upload
             </NavLink>

@@ -6,6 +6,8 @@ import StatusBadge from '../components/StatusBadge'
 import LabelBadge from '../components/LabelBadge'
 import RiskTimelineChart from '../components/RiskTimelineChart'
 import LabelOverrideForm from '../components/LabelOverrideForm'
+import TagOverrideForm from '../components/TagOverrideForm'
+import { usePolling } from '../hooks/usePolling'
 
 export default function IncidentDetail() {
   const { id } = useParams<{ id: string }>()
@@ -13,22 +15,26 @@ export default function IncidentDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!id) return
-    setLoading(true)
+    if (!silent) setLoading(true)
     setError(null)
     try {
       setIncident(await getIncident(id))
     } catch {
       setError('Incident not found or API unavailable.')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [id])
 
   useEffect(() => {
     load()
   }, [load])
+
+  const isProcessing =
+    incident?.status === 'waiting' || incident?.status === 'processing'
+  usePolling(() => load(true), 5000, !!isProcessing)
 
   if (loading) {
     return (
@@ -47,8 +53,6 @@ export default function IncidentDetail() {
     )
   }
 
-  const isProcessing = incident.status === 'waiting' || incident.status === 'processing'
-
   return (
     <div className="page">
       <div className="page-header">
@@ -59,7 +63,12 @@ export default function IncidentDetail() {
           <h1>Incident detail</h1>
           <p className="text-muted mono-id">{incident.id}</p>
         </div>
-        <StatusBadge status={incident.status} />
+        <div className="detail-status-wrap">
+          <StatusBadge status={incident.status} />
+          {isProcessing && (
+            <span className="polling-indicator">Checking for updates…</span>
+          )}
+        </div>
       </div>
 
       <div className="detail-grid">
@@ -104,7 +113,7 @@ export default function IncidentDetail() {
           <LabelOverrideForm
             incidentId={incident.id}
             currentLabel={incident.label}
-            onUpdated={load}
+            onUpdated={() => load(true)}
           />
         </aside>
       </div>
@@ -112,8 +121,9 @@ export default function IncidentDetail() {
       {isProcessing && (
         <div className="card processing-banner">
           <p>
-            <strong>Processing in progress.</strong> ML outputs (risk timeline, tags, summary)
-            will appear here when analysis completes.
+            <strong>Status: {incident.status}.</strong> ML outputs (risk timeline, tags,
+            summary) will appear here when analysis completes. This page refreshes
+            automatically.
           </p>
         </div>
       )}
@@ -138,6 +148,12 @@ export default function IncidentDetail() {
           </ul>
         </section>
       )}
+
+      <TagOverrideForm
+        incidentId={incident.id}
+        currentTags={incident.tags ?? []}
+        onUpdated={() => load(true)}
+      />
 
       {incident.risk_timeline && incident.risk_timeline.length > 0 && (
         <section className="card">
