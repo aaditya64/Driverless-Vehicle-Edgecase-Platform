@@ -28,6 +28,8 @@ data/processed/**/*.mp4
 # Downloaded model repos, checkpoints, and inference outputs
 models/
 outputs/
+!collision_contact_full_repro/outputs/
+!collision_contact_full_repro/outputs/**
 *.pth
 *.pt
 *.safetensors
