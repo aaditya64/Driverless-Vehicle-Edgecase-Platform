@@ -1,0 +1,110 @@
+seed: 20260520
+paths:
+  train_csv: splits/processed_744/train.csv
+  test_csv: splits/processed_744/test.csv
+  feature_dir: outputs/processed_744/features
+  checkpoint_dir: outputs/processed_744_small/checkpoints
+  report_dir: outputs/processed_744_small/reports
+video:
+  resize_width: 640
+  target_fps: 30.0
+  target_frames: 300
+  clahe: true
+motion:
+  max_corners: 2500
+  quality_level: 0.01
+  min_distance: 7
+  block_size: 7
+  lk_win_size: 21
+  lk_max_level: 3
+  lk_max_iter: 30
+  lk_eps: 0.01
+  fb_error_threshold: 1.5
+  ransac_threshold: 2.0
+  ransac_confidence: 0.995
+  ransac_max_iters: 3000
+  min_tracks: 80
+  min_inliers: 50
+  smoothing_window: 31
+  smoothing_polyorder: 3
+features:
+  sequence_keys:
+  - raw
+  - cwt
+  - swt
+  handcrafted_key: handcrafted_local
+  raw_channels:
+  - dx
+  - dy
+  - theta_px
+  - scale_delta
+  - x_res
+  - y_res
+  - theta_res_px
+  - vx
+  - vy
+  - vtheta_px
+  - ax
+  - ay
+  - atheta_px
+  - jerk_x
+  - jerk_y
+  - jerk_theta_px
+  - shake_energy
+  - jerk_energy
+  - inlier_ratio
+  - fit_error
+  wavelet_channels:
+  - x_res
+  - y_res
+  - theta_res_px
+  - ax
+  - ay
+  - atheta_px
+  - jerk_x
+  - jerk_y
+  - jerk_theta_px
+  - shake_energy
+  - jerk_energy
+  - fit_error
+  cwt:
+    wavelet: cmor1.5-1.0
+    freq_min: 0.5
+    freq_max: 14.0
+    n_freqs: 48
+  swt:
+    wavelet: sym4
+    levels: 4
+  save_motion_reports: false
+model:
+  d_model: 64
+  num_layers: 2
+  num_heads: 4
+  ffn_dim: 128
+  dropout: 0.35
+  patch_len: 8
+  patch_stride: 4
+  num_classes: 2
+  use_handcrafted_head: true
+  handcrafted_dim: 0
+training:
+  device: cuda
+  epochs: 80
+  batch_size: 32
+  lr: 0.00015
+  weight_decay: 0.05
+  label_smoothing: 0.05
+  contrastive_weight: 0.0
+  contrastive_temperature: 0.2
+  grad_clip_norm: 1.0
+  amp: true
+  early_stop_patience: 15
+  num_workers: 0
+  augmentation:
+    enabled: true
+    noise_std: 0.02
+    amplitude_min: 0.85
+    amplitude_max: 1.15
+    time_mask_prob: 0.45
+    time_mask_max_frames: 24
+    feature_dropout_prob: 0.1

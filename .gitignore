@@ -1,4 +1,10 @@
 # Python
+__pycache__/
+*.py[cod]
+*.log
+.env
+.venv/
+venv/
 backend/.venv/
 backend/__pycache__/
 backend/*.pyc
@@ -7,6 +13,32 @@ backend/.env
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# Large local datasets and generated media
+data/nexar_collision_prediction/
+data/processed/event_clips/
+data/processed/**/*.mp4
+*.mp4
+
+# Keep small generated manifests for reproducibility.
+!data/processed/
+!data/processed/clip_manifests/
+!data/processed/clip_manifests/*.csv
+
+# Downloaded model repos, checkpoints, and inference outputs
+models/
+outputs/
+!collision_contact_full_repro/outputs/
+!collision_contact_full_repro/outputs/**
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+*.onnx
+
+# Local cache directories
+.cache/
+*/.cache/
 
 # General
 .DS_Store

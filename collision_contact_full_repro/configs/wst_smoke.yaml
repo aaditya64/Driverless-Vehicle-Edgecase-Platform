@@ -1,0 +1,104 @@
+seed: 20260520
+paths:
+  train_csv: splits/processed_744/train.csv
+  test_csv: splits/processed_744/test.csv
+  feature_dir: outputs/smoke/features
+  checkpoint_dir: outputs/smoke/checkpoints
+  report_dir: outputs/smoke/reports
+video:
+  resize_width: 320
+  target_fps: 30.0
+  target_frames: 90
+  clahe: true
+motion:
+  max_corners: 800
+  quality_level: 0.01
+  min_distance: 7
+  block_size: 7
+  lk_win_size: 21
+  lk_max_level: 3
+  lk_max_iter: 30
+  lk_eps: 0.01
+  fb_error_threshold: 1.5
+  ransac_threshold: 2.0
+  ransac_confidence: 0.995
+  ransac_max_iters: 1000
+  min_tracks: 40
+  min_inliers: 25
+  smoothing_window: 15
+  smoothing_polyorder: 3
+features:
+  sequence_keys:
+  - raw
+  - cwt
+  - swt
+  handcrafted_key: handcrafted_local
+  raw_channels:
+  - dx
+  - dy
+  - theta_px
+  - scale_delta
+  - x_res
+  - y_res
+  - theta_res_px
+  - vx
+  - vy
+  - vtheta_px
+  - ax
+  - ay
+  - atheta_px
+  - jerk_x
+  - jerk_y
+  - jerk_theta_px
+  - shake_energy
+  - jerk_energy
+  - inlier_ratio
+  - fit_error
+  wavelet_channels:
+  - x_res
+  - y_res
+  - theta_res_px
+  - ax
+  - ay
+  - atheta_px
+  - jerk_x
+  - jerk_y
+  - jerk_theta_px
+  - shake_energy
+  - jerk_energy
+  - fit_error
+  cwt:
+    wavelet: cmor1.5-1.0
+    freq_min: 0.5
+    freq_max: 14.0
+    n_freqs: 16
+  swt:
+    wavelet: sym4
+    levels: 2
+  save_motion_reports: false
+model:
+  d_model: 64
+  num_layers: 2
+  num_heads: 4
+  ffn_dim: 128
+  dropout: 0.35
+  patch_len: 8
+  patch_stride: 4
+  num_classes: 2
+  use_handcrafted_head: true
+  handcrafted_dim: 0
+training:
+  device: cuda
+  epochs: 1
+  batch_size: 2
+  lr: 0.00015
+  weight_decay: 0.05
+  label_smoothing: 0.05
+  contrastive_weight: 0.0
+  contrastive_temperature: 0.2
+  grad_clip_norm: 1.0
+  amp: true
+  early_stop_patience: 1
+  num_workers: 0
+  augmentation:
+    enabled: false
