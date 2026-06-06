@@ -1,42 +1,57 @@
 import os
+import uuid
+
 import boto3
 from botocore.exceptions import ClientError
 from fastapi import UploadFile
-import uuid
 
-# Load from environment variables (assuming you are using dotenv/os.environ)
-S3_ENDPOINT = os.getenv("S3_ENDPOINT_URL", "http://localhost:9000")
-ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "dev_access_key")
-SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "dev_secret_key")
-BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "edgecase-videos")
+AWS_REGION = os.getenv("AWS_REGION", "eu-west-2")
+ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
+SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+S3_ENDPOINT = os.getenv("S3_ENDPOINT_URL")
 
-s3_client = boto3.client(
-    "s3",
-    endpoint_url=S3_ENDPOINT,
-    aws_access_key_id=ACCESS_KEY,
-    aws_secret_access_key=SECRET_KEY,
-    region_name=os.getenv("AWS_REGION", "eu-west-2")
-)
+if not BUCKET_NAME:
+    raise ValueError("S3_BUCKET_NAME environment variable is required")
 
-def ensure_bucket_exists():
-    """Creates the MinIO bucket on startup if it doesn't exist."""
+_client_kwargs: dict = {"region_name": AWS_REGION}
+if ACCESS_KEY and SECRET_KEY:
+    _client_kwargs["aws_access_key_id"] = ACCESS_KEY
+    _client_kwargs["aws_secret_access_key"] = SECRET_KEY
+if S3_ENDPOINT:
+    _client_kwargs["endpoint_url"] = S3_ENDPOINT
+
+s3_client = boto3.client("s3", **_client_kwargs)
+
+
+def ensure_bucket_exists() -> None:
+    """Verify the configured bucket is reachable (creates bucket only for local MinIO)."""
     try:
         s3_client.head_bucket(Bucket=BUCKET_NAME)
-    except ClientError:
-        s3_client.create_bucket(Bucket=BUCKET_NAME)
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if S3_ENDPOINT and error_code in ("404", "NoSuchBucket", "403"):
+            s3_client.create_bucket(Bucket=BUCKET_NAME)
+            return
+        raise RuntimeError(
+            f"S3 bucket '{BUCKET_NAME}' is not accessible in {AWS_REGION}. "
+            "Check AWS credentials, IAM permissions, region, and bucket name."
+        ) from exc
+
 
 def upload_video_to_s3(file: UploadFile) -> str:
-    """
-    Uploads a file to S3/MinIO and returns the generated s3_key.
-    """
-    file_extension = file.filename.split(".")[-1] if "." in file.filename else "mp4"
+    file_extension = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "mp4"
     s3_key = f"uploads/{uuid.uuid4()}.{file_extension}"
-    
+
+    content_type = file.content_type
+    if not content_type or content_type == "application/octet-stream":
+        content_type = f"video/{file_extension}" if file_extension in ("mp4", "webm", "mov") else "video/mp4"
+
     s3_client.upload_fileobj(
         file.file,
         BUCKET_NAME,
         s3_key,
-        ExtraArgs={"ContentType": file.content_type}
+        ExtraArgs={"ContentType": content_type},
     )
     return s3_key
 

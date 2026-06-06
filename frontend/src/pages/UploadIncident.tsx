@@ -37,7 +37,7 @@ export default function UploadIncident() {
       const created = await createIncident(formData)
       navigate(`/incidents/${created.id}`)
     } catch {
-      setError('Upload failed. Check that the API and MinIO are running.')
+      setError('Upload failed. Check that the API is running and AWS S3 credentials are configured.')
     } finally {
       setSubmitting(false)
     }
