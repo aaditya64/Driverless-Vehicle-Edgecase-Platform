@@ -62,3 +62,7 @@ def get_presigned_video_url(s3_key: str, expires_in: int = 3600) -> str:
         Params={"Bucket": BUCKET_NAME, "Key": s3_key},
         ExpiresIn=expires_in,
     )
+
+
+def delete_video_from_s3(s3_key: str) -> None:
+    s3_client.delete_object(Bucket=BUCKET_NAME, Key=s3_key)

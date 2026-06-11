@@ -9,8 +9,14 @@ import json
 import uuid
 
 from database import get_db
-from models import Incident, Label, LabelChange, Tag, Summary, RiskTimeline
-from s3 import upload_video_to_s3, ensure_bucket_exists, get_presigned_video_url
+from models import Annotation, Incident, Label, LabelChange, Tag, Summary, RiskTimeline
+from ml_worker import start_ml_worker
+from s3 import (
+    delete_video_from_s3,
+    upload_video_to_s3,
+    ensure_bucket_exists,
+    get_presigned_video_url,
+)
 
 app = FastAPI(title="Edge-Case Intelligence Platform")
 
@@ -25,6 +31,7 @@ app.add_middleware(
 @app.on_event("startup")
 def startup_event():
     ensure_bucket_exists()
+    start_ml_worker()
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -227,6 +234,28 @@ def get_incident_video(incident_id: str, db: Session = Depends(get_db)):
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
     return {"video_url": get_presigned_video_url(incident.s3_key)}
+
+
+@app.delete("/incidents/{incident_id}")
+def delete_incident(incident_id: str, db: Session = Depends(get_db)):
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    try:
+        delete_video_from_s3(incident.s3_key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"S3 delete failed: {str(e)}")
+
+    db.query(Annotation).filter(Annotation.incident_id == incident_id).delete()
+    db.query(LabelChange).filter(LabelChange.incident_id == incident_id).delete()
+    db.query(Label).filter(Label.incident_id == incident_id).delete()
+    db.query(Tag).filter(Tag.incident_id == incident_id).delete()
+    db.query(Summary).filter(Summary.incident_id == incident_id).delete()
+    db.query(RiskTimeline).filter(RiskTimeline.incident_id == incident_id).delete()
+    db.delete(incident)
+    db.commit()
+    return {"deleted": True, "incident_id": incident_id}
 
 
 # ── Labels ────────────────────────────────────────────────────────────────────

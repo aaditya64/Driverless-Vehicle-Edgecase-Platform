@@ -3,7 +3,7 @@ export type ClassificationLabel = 'safe' | 'near_miss' | 'collision'
 
 export interface IncidentLabel {
   value: ClassificationLabel
-  source: 'model' | 'human'
+  source: string
   confidence: number | null
 }
 
@@ -11,6 +11,32 @@ export interface IncidentTag {
   tag_type: string
   tag_value: string
 }
+
+export interface RiskTimelinePoint {
+  frame_idx: number
+  time_sec: number
+  risk_score: number
+  shake_energy?: number
+  jerk_energy?: number
+  valid_motion?: boolean
+}
+
+export interface RiskTimelinePayload {
+  source?: string
+  score_type?: string
+  temporal_resolution?: string
+  frame_count?: number
+  fps?: number
+  duration_sec?: number
+  peak?: {
+    frame_idx?: number
+    time_sec?: number
+    risk_score?: number
+  }
+  points: RiskTimelinePoint[]
+}
+
+export type RiskTimeline = number[] | RiskTimelinePayload
 
 export interface IncidentSummary {
   id: string
@@ -25,7 +51,7 @@ export interface IncidentSummary {
 
 export interface IncidentDetail extends IncidentSummary {
   summary?: string | null
-  risk_timeline?: number[] | null
+  risk_timeline?: RiskTimeline | null
   video_url?: string
 }
 

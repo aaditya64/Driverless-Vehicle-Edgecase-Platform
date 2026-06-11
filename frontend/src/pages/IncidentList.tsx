@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { listIncidents } from '../api/incidents'
+import { deleteIncident, listIncidents } from '../api/incidents'
 import type { IncidentSummary } from '../types/incident'
 import StatusBadge from '../components/StatusBadge'
 import LabelBadge from '../components/LabelBadge'
@@ -16,6 +16,7 @@ export default function IncidentList() {
   const [filters, setFilters] = useState<IncidentFilterState>(DEFAULT_FILTERS)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -38,6 +39,24 @@ export default function IncidentList() {
     (i) => i.status === 'waiting' || i.status === 'processing',
   )
   usePolling(() => load(true), 5000, hasActiveProcessing)
+
+  const handleDelete = async (incident: IncidentSummary) => {
+    const confirmed = window.confirm(
+      'Remove this incident record and delete its uploaded video?',
+    )
+    if (!confirmed) return
+
+    setDeletingId(incident.id)
+    setError(null)
+    try {
+      await deleteIncident(incident.id)
+      setIncidents((current) => current.filter((i) => i.id !== incident.id))
+    } catch {
+      setError('Could not remove incident. Check the API logs and S3 permissions.')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   return (
     <div className="page">
@@ -122,9 +141,19 @@ export default function IncidentList() {
                     )}
                   </td>
                   <td>
-                    <Link to={`/incidents/${i.id}`} className="btn btn-ghost btn-sm">
-                      View
-                    </Link>
+                    <div className="table-actions">
+                      <Link to={`/incidents/${i.id}`} className="btn btn-ghost btn-sm">
+                        View
+                      </Link>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        disabled={deletingId === i.id}
+                        onClick={() => handleDelete(i)}
+                      >
+                        {deletingId === i.id ? 'Removing…' : 'Remove'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

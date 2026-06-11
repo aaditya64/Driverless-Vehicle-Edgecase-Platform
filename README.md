@@ -50,6 +50,13 @@ AWS_ACCESS_KEY_ID=your_access_key_id
 AWS_SECRET_ACCESS_KEY=your_secret_access_key
 S3_BUCKET_NAME=your-bucket-name
 AWS_REGION=eu-west-2
+
+ML_API_URL=https://your-ml-api/v1/traffic-events/analyze-url?token=your_token
+ML_API_VERIFY_SSL=0
+ML_API_VIDEO_SOURCE=github
+GITHUB_REPO=your-github-user/your-relay-repo
+GITHUB_TOKEN=your_github_pat
+GITHUB_MIRROR=https://gh-proxy.com/
 ```
 
 Apply database migrations:

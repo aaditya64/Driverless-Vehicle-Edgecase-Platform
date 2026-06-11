@@ -39,6 +39,10 @@ export async function createIncident(formData: FormData): Promise<IncidentSummar
   return data
 }
 
+export async function deleteIncident(incidentId: string): Promise<void> {
+  await api.delete(`/incidents/${incidentId}`)
+}
+
 export async function overrideLabel(
   incidentId: string,
   payload: LabelOverridePayload,

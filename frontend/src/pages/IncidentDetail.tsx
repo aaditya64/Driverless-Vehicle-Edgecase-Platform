@@ -6,8 +6,14 @@ import StatusBadge from '../components/StatusBadge'
 import LabelBadge from '../components/LabelBadge'
 import RiskTimelineChart from '../components/RiskTimelineChart'
 import LabelOverrideForm from '../components/LabelOverrideForm'
-import TagOverrideForm from '../components/TagOverrideForm'
+// import TagOverrideForm from '../components/TagOverrideForm'
 import { usePolling } from '../hooks/usePolling'
+
+function hasRiskTimeline(timeline: IncidentDetailType['risk_timeline']) {
+  if (!timeline) return false
+  if (Array.isArray(timeline)) return timeline.length > 0
+  return Array.isArray(timeline.points) && timeline.points.length > 0
+}
 
 export default function IncidentDetail() {
   const { id } = useParams<{ id: string }>()
@@ -135,6 +141,14 @@ export default function IncidentDetail() {
         </section>
       )}
 
+      {hasRiskTimeline(incident.risk_timeline) && incident.risk_timeline && (
+        <section className="card">
+          <h2>Risk timeline</h2>
+          <p className="text-muted">Temporal risk signal across the analysed clip.</p>
+          <RiskTimelineChart timeline={incident.risk_timeline} />
+        </section>
+      )}
+
       {incident.tags && incident.tags.length > 0 && (
         <section className="card">
           <h2>Semantic tags</h2>
@@ -149,19 +163,11 @@ export default function IncidentDetail() {
         </section>
       )}
 
-      <TagOverrideForm
+      {/* <TagOverrideForm
         incidentId={incident.id}
         currentTags={incident.tags ?? []}
         onUpdated={() => load(true)}
-      />
-
-      {incident.risk_timeline && incident.risk_timeline.length > 0 && (
-        <section className="card">
-          <h2>Risk timeline</h2>
-          <p className="text-muted">BADAS temporal risk signal across the analysed clip.</p>
-          <RiskTimelineChart scores={incident.risk_timeline} />
-        </section>
-      )}
+      /> */}
     </div>
   )
 }
