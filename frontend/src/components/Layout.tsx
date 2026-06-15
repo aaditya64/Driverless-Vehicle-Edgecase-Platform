@@ -1,6 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 
 export default function Layout() {
+  const { user, logout } = useAuth()
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -18,6 +21,15 @@ export default function Layout() {
             <NavLink to="/upload" className={({ isActive }) => (isActive ? 'active' : '')}>
               Upload
             </NavLink>
+            {user ? (
+              <button type="button" className="nav-button" onClick={logout}>
+                {user.display_name} · Logout
+              </button>
+            ) : (
+              <NavLink to="/login" className={({ isActive }) => (isActive ? 'active' : '')}>
+                Login
+              </NavLink>
+            )}
           </nav>
         </div>
       </header>

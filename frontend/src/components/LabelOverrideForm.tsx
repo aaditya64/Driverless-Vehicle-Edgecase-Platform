@@ -1,6 +1,9 @@
 import { useState } from 'react'
+import type { FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import type { ClassificationLabel, IncidentLabel } from '../types/incident'
 import { overrideLabel } from '../api/incidents'
+import { useAuth } from '../auth/AuthContext'
 import LabelBadge from './LabelBadge'
 
 const OPTIONS: { value: ClassificationLabel; label: string }[] = [
@@ -20,18 +23,18 @@ export default function LabelOverrideForm({
   currentLabel,
   onUpdated,
 }: LabelOverrideFormProps) {
+  const { user } = useAuth()
   const [value, setValue] = useState<ClassificationLabel>(
     currentLabel?.value ?? 'safe',
   )
-  const [reviewer, setReviewer] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!reviewer.trim()) {
-      setError('Enter your name as reviewer.')
+    if (!user) {
+      setError('Log in to save a label override.')
       return
     }
     setSaving(true)
@@ -40,7 +43,6 @@ export default function LabelOverrideForm({
     try {
       await overrideLabel(incidentId, {
         value,
-        changed_by: reviewer.trim(),
       })
       setSuccess(true)
       onUpdated()
@@ -57,6 +59,11 @@ export default function LabelOverrideForm({
       <p className="text-muted">
         Current: <LabelBadge value={currentLabel?.value} source={currentLabel?.source} />
       </p>
+      {!user && (
+        <p className="text-muted">
+          <Link to="/login">Log in</Link> to save classification edits.
+        </p>
+      )}
       <form onSubmit={handleSubmit} className="annotation-form">
         <div className="form-row">
           <label htmlFor="label-override">Override label</label>
@@ -72,19 +79,9 @@ export default function LabelOverrideForm({
             ))}
           </select>
         </div>
-        <div className="form-row">
-          <label htmlFor="reviewer">Reviewer</label>
-          <input
-            id="reviewer"
-            type="text"
-            placeholder="Your name"
-            value={reviewer}
-            onChange={(e) => setReviewer(e.target.value)}
-          />
-        </div>
         {error && <p className="form-error">{error}</p>}
         {success && <p className="form-success">Label updated.</p>}
-        <button type="submit" className="btn btn-primary" disabled={saving}>
+        <button type="submit" className="btn btn-primary" disabled={saving || !user}>
           {saving ? 'Saving…' : 'Save override'}
         </button>
       </form>

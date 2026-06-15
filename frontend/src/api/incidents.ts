@@ -3,6 +3,7 @@ import type {
   IncidentDetail,
   IncidentSummary,
   LabelOverridePayload,
+  SummaryOverridePayload,
   TagOverridePayload,
 } from '../types/incident'
 
@@ -55,4 +56,11 @@ export async function overrideTags(
   payload: TagOverridePayload,
 ): Promise<void> {
   await api.patch(`/incidents/${incidentId}/tags`, payload)
+}
+
+export async function overrideSummary(
+  incidentId: string,
+  payload: SummaryOverridePayload,
+): Promise<void> {
+  await api.patch(`/incidents/${incidentId}/summary`, payload)
 }

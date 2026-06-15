@@ -20,6 +20,30 @@ class Incident(Base):
     narrative = Column(String, nullable=True)
     status = Column(String, default="processing")  # processing, complete, failed
 
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    email = Column(String, nullable=False, unique=True, index=True)
+    display_name = Column(String, nullable=False)
+    password_hash = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EditEvent(Base):
+    __tablename__ = "edit_events"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    incident_id = Column(String, nullable=False)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    action = Column(String, nullable=False)
+    target = Column(String, nullable=False)
+    before = Column(JSON, nullable=True)
+    after = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Label(Base):
     __tablename__ = "labels"
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import type { IncidentTag } from '../types/incident'
 import { overrideTags } from '../api/incidents'
-import { SEMANTIC_TAG_TYPES } from '../constants/tags'
+import { useAuth } from '../auth/AuthContext'
 
 interface TagRow {
   tag_type: string
@@ -24,8 +26,8 @@ export default function TagOverrideForm({
   currentTags,
   onUpdated,
 }: TagOverrideFormProps) {
+  const { user } = useAuth()
   const [rows, setRows] = useState<TagRow[]>(() => tagsToRows(currentTags))
-  const [reviewer, setReviewer] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
@@ -44,10 +46,10 @@ export default function TagOverrideForm({
     setRows((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)))
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!reviewer.trim()) {
-      setError('Enter your name as reviewer.')
+    if (!user) {
+      setError('Log in to save tag edits.')
       return
     }
     const tags = rows.filter((r) => r.tag_type.trim() && r.tag_value.trim())
@@ -57,7 +59,6 @@ export default function TagOverrideForm({
     try {
       await overrideTags(incidentId, {
         tags,
-        changed_by: reviewer.trim(),
       })
       setSuccess(true)
       onUpdated()
@@ -75,21 +76,21 @@ export default function TagOverrideForm({
         Override model-generated semantic tags or add context tags. Changes are saved to the
         database.
       </p>
+      {!user && (
+        <p className="text-muted">
+          <Link to="/login">Log in</Link> to save tag edits.
+        </p>
+      )}
       <form onSubmit={handleSubmit} className="annotation-form">
         <div className="tag-override-rows">
           {rows.map((row, index) => (
             <div key={index} className="tag-override-row">
-              <select
+              <input
                 value={row.tag_type}
                 onChange={(e) => updateRow(index, { tag_type: e.target.value })}
                 aria-label={`Tag type ${index + 1}`}
-              >
-                {SEMANTIC_TAG_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+                placeholder="Tag type"
+              />
               <input
                 type="text"
                 placeholder="Tag value"
@@ -110,19 +111,9 @@ export default function TagOverrideForm({
         <button type="button" className="btn btn-ghost btn-sm" onClick={addRow}>
           Add tag
         </button>
-        <div className="form-row">
-          <label htmlFor="tag-reviewer">Reviewer</label>
-          <input
-            id="tag-reviewer"
-            type="text"
-            placeholder="Your name"
-            value={reviewer}
-            onChange={(e) => setReviewer(e.target.value)}
-          />
-        </div>
         {error && <p className="form-error">{error}</p>}
         {success && <p className="form-success">Tags updated.</p>}
-        <button type="submit" className="btn btn-primary" disabled={saving}>
+        <button type="submit" className="btn btn-primary" disabled={saving || !user}>
           {saving ? 'Saving…' : 'Save tag overrides'}
         </button>
       </form>

@@ -6,10 +6,28 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
 import json
+import os
 import uuid
 
+from auth import (
+    create_token,
+    get_current_user,
+    hash_password,
+    user_response,
+    verify_password,
+)
 from database import get_db
-from models import Annotation, Incident, Label, LabelChange, Tag, Summary, RiskTimeline
+from models import (
+    Annotation,
+    EditEvent,
+    Incident,
+    Label,
+    LabelChange,
+    Tag,
+    Summary,
+    RiskTimeline,
+    User,
+)
 from ml_worker import start_ml_worker
 from s3 import (
     delete_video_from_s3,
@@ -20,9 +38,17 @@ from s3 import (
 
 app = FastAPI(title="Edge-Case Intelligence Platform")
 
+
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS")
+    if not raw:
+        return ["http://localhost:5173", "http://127.0.0.1:5173"]
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,7 +63,13 @@ def startup_event():
 
 class LabelOverride(BaseModel):
     value: Literal["safe", "near_miss", "collision"]
-    changed_by: str
+    changed_by: Optional[str] = None
+
+
+class AuthPayload(BaseModel):
+    email: str
+    password: str
+    display_name: Optional[str] = None
 
 
 class TagItem(BaseModel):
@@ -47,7 +79,11 @@ class TagItem(BaseModel):
 
 class TagOverride(BaseModel):
     tags: list[TagItem]
-    changed_by: str
+    changed_by: Optional[str] = None
+
+
+class SummaryOverride(BaseModel):
+    text: str
 
 
 def _serialize_label(label: Label | None) -> dict | None:
@@ -60,9 +96,46 @@ def _serialize_label(label: Label | None) -> dict | None:
     }
 
 
+def _serialize_user(user: User | None) -> dict | None:
+    if not user:
+        return None
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+    }
+
+
 def _serialize_tags(db: Session, incident_id: str) -> list[dict]:
     tags = db.query(Tag).filter(Tag.incident_id == incident_id).all()
     return [{"tag_type": t.tag_type, "tag_value": t.tag_value} for t in tags]
+
+
+def _serialize_edit_history(db: Session, incident_id: str) -> list[dict]:
+    events = (
+        db.query(EditEvent)
+        .filter(EditEvent.incident_id == incident_id)
+        .order_by(EditEvent.created_at.desc())
+        .all()
+    )
+    user_ids = {event.user_id for event in events}
+    users = (
+        {user.id: user for user in db.query(User).filter(User.id.in_(user_ids)).all()}
+        if user_ids
+        else {}
+    )
+    return [
+        {
+            "id": event.id,
+            "action": event.action,
+            "target": event.target,
+            "before": event.before,
+            "after": event.after,
+            "created_at": event.created_at,
+            "user": _serialize_user(users.get(event.user_id)),
+        }
+        for event in events
+    ]
 
 
 def _serialize_incident(
@@ -73,6 +146,11 @@ def _serialize_incident(
     include_video_url: bool = False,
 ) -> dict:
     label = db.query(Label).filter(Label.incident_id == incident.id).first()
+    uploader = (
+        db.query(User).filter(User.id == incident.uploader_id).first()
+        if incident.uploader_id
+        else None
+    )
     data = {
         "id": incident.id,
         "status": incident.status,
@@ -80,6 +158,7 @@ def _serialize_incident(
         "location_lat": incident.location_lat,
         "location_lng": incident.location_lng,
         "uploaded_at": incident.uploaded_at,
+        "uploader": _serialize_user(uploader),
         "label": _serialize_label(label),
         "tags": _serialize_tags(db, incident.id),
     }
@@ -88,6 +167,7 @@ def _serialize_incident(
         timeline = db.query(RiskTimeline).filter(RiskTimeline.incident_id == incident.id).first()
         data["summary"] = summary.text if summary else None
         data["risk_timeline"] = timeline.scores if timeline else None
+        data["edit_history"] = _serialize_edit_history(db, incident.id)
     if include_video_url:
         data["video_url"] = get_presigned_video_url(incident.s3_key)
     return data
@@ -117,11 +197,76 @@ def _save_context_tags(db: Session, incident_id: str, context_tags: list[str]) -
         )
 
 
+def _record_edit(
+    db: Session,
+    incident_id: str,
+    user: User,
+    action: str,
+    target: str,
+    before: object | None,
+    after: object | None,
+) -> None:
+    db.add(
+        EditEvent(
+            id=str(uuid.uuid4()),
+            incident_id=incident_id,
+            user_id=user.id,
+            action=action,
+            target=target,
+            before=before,
+            after=after,
+            created_at=datetime.utcnow(),
+        )
+    )
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+@app.post("/auth/signup", status_code=201)
+def signup(payload: AuthPayload, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    password = payload.password
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid email is required")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Email is already registered")
+
+    display_name = payload.display_name.strip() if payload.display_name else email.split("@")[0]
+    user = User(
+        id=str(uuid.uuid4()),
+        email=email,
+        display_name=display_name,
+        password_hash=hash_password(password),
+        created_at=datetime.utcnow(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"token": create_token(user), "user": user_response(user)}
+
+
+@app.post("/auth/login")
+def login(payload: AuthPayload, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return {"token": create_token(user), "user": user_response(user)}
+
+
+@app.get("/auth/me")
+def me(current_user: User = Depends(get_current_user)):
+    return {"user": user_response(current_user)}
 
 
 # ── Incidents ─────────────────────────────────────────────────────────────────
@@ -133,7 +278,8 @@ def create_incident(
     location_lat: Optional[float] = Form(None),
     location_lng: Optional[float] = Form(None),
     context_tags: Optional[str] = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     is_video = (
         video_file.content_type
@@ -160,7 +306,8 @@ def create_incident(
         location_lat=location_lat,
         location_lng=location_lng,
         status="waiting",
-        uploaded_at=datetime.utcnow()
+        uploaded_at=datetime.utcnow(),
+        uploader_id=current_user.id,
     )
     db.add(incident)
     db.flush()
@@ -237,7 +384,11 @@ def get_incident_video(incident_id: str, db: Session = Depends(get_db)):
 
 
 @app.delete("/incidents/{incident_id}")
-def delete_incident(incident_id: str, db: Session = Depends(get_db)):
+def delete_incident(
+    incident_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -253,6 +404,15 @@ def delete_incident(incident_id: str, db: Session = Depends(get_db)):
     db.query(Tag).filter(Tag.incident_id == incident_id).delete()
     db.query(Summary).filter(Summary.incident_id == incident_id).delete()
     db.query(RiskTimeline).filter(RiskTimeline.incident_id == incident_id).delete()
+    _record_edit(
+        db,
+        incident_id,
+        current_user,
+        "delete",
+        "incident",
+        {"status": incident.status, "s3_key": incident.s3_key},
+        None,
+    )
     db.delete(incident)
     db.commit()
     return {"deleted": True, "incident_id": incident_id}
@@ -261,19 +421,25 @@ def delete_incident(incident_id: str, db: Session = Depends(get_db)):
 # ── Labels ────────────────────────────────────────────────────────────────────
 
 @app.patch("/incidents/{incident_id}/labels")
-def override_label(incident_id: str, data: LabelOverride, db: Session = Depends(get_db)):
+def override_label(
+    incident_id: str,
+    data: LabelOverride,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
     existing_label = db.query(Label).filter(Label.incident_id == incident_id).first()
+    before = _serialize_label(existing_label)
 
     change = LabelChange(
         id=str(uuid.uuid4()),
         incident_id=incident_id,
         old_value=existing_label.value if existing_label else "none",
         new_value=data.value,
-        changed_by=data.changed_by,
+        changed_by=current_user.id,
         changed_at=datetime.utcnow()
     )
     db.add(change)
@@ -291,21 +457,36 @@ def override_label(incident_id: str, data: LabelOverride, db: Session = Depends(
         )
         db.add(new_label)
 
+    _record_edit(
+        db,
+        incident_id,
+        current_user,
+        "update",
+        "label",
+        before,
+        {"value": data.value, "source": "human", "confidence": None},
+    )
     db.commit()
     return {
         "incident_id": incident_id,
         "new_value": data.value,
-        "changed_by": data.changed_by,
+        "changed_by": current_user.id,
         "changed_at": change.changed_at
     }
 
 
 @app.patch("/incidents/{incident_id}/tags")
-def override_tags(incident_id: str, data: TagOverride, db: Session = Depends(get_db)):
+def override_tags(
+    incident_id: str,
+    data: TagOverride,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
+    before = _serialize_tags(db, incident_id)
     db.query(Tag).filter(Tag.incident_id == incident_id).delete()
     for tag in data.tags:
         if not tag.tag_type.strip() or not tag.tag_value.strip():
@@ -319,11 +500,45 @@ def override_tags(incident_id: str, data: TagOverride, db: Session = Depends(get
             )
         )
 
+    after = [{"tag_type": t.tag_type, "tag_value": t.tag_value} for t in data.tags]
+    _record_edit(db, incident_id, current_user, "update", "tags", before, after)
     db.commit()
     return {
         "incident_id": incident_id,
         "tags": _serialize_tags(db, incident_id),
-        "changed_by": data.changed_by,
+        "changed_by": current_user.id,
+        "changed_at": datetime.utcnow(),
+    }
+
+
+@app.patch("/incidents/{incident_id}/summary")
+def override_summary(
+    incident_id: str,
+    data: SummaryOverride,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    text = data.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Summary cannot be empty")
+
+    summary = db.query(Summary).filter(Summary.incident_id == incident_id).first()
+    before = {"text": summary.text} if summary else None
+    if summary:
+        summary.text = text
+    else:
+        summary = Summary(id=str(uuid.uuid4()), incident_id=incident_id, text=text)
+        db.add(summary)
+    incident.narrative = text
+    _record_edit(db, incident_id, current_user, "update", "summary", before, {"text": text})
+    db.commit()
+    return {
+        "incident_id": incident_id,
+        "summary": text,
+        "changed_by": current_user.id,
         "changed_at": datetime.utcnow(),
     }
 

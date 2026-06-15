@@ -12,6 +12,22 @@ export interface IncidentTag {
   tag_value: string
 }
 
+export interface IncidentUser {
+  id: string
+  email: string
+  display_name: string
+}
+
+export interface EditHistoryItem {
+  id: string
+  action: string
+  target: string
+  before?: unknown
+  after?: unknown
+  created_at: string
+  user: IncidentUser | null
+}
+
 export interface RiskTimelinePoint {
   frame_idx: number
   time_sec: number
@@ -45,6 +61,7 @@ export interface IncidentSummary {
   location_lat: number | null
   location_lng: number | null
   uploaded_at: string
+  uploader: IncidentUser | null
   label: IncidentLabel | null
   tags: IncidentTag[]
 }
@@ -53,14 +70,19 @@ export interface IncidentDetail extends IncidentSummary {
   summary?: string | null
   risk_timeline?: RiskTimeline | null
   video_url?: string
+  edit_history?: EditHistoryItem[]
 }
 
 export interface LabelOverridePayload {
   value: ClassificationLabel
-  changed_by: string
+  changed_by?: string
 }
 
 export interface TagOverridePayload {
   tags: IncidentTag[]
-  changed_by: string
+  changed_by?: string
+}
+
+export interface SummaryOverridePayload {
+  text: string
 }

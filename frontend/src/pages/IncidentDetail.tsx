@@ -6,13 +6,18 @@ import StatusBadge from '../components/StatusBadge'
 import LabelBadge from '../components/LabelBadge'
 import RiskTimelineChart from '../components/RiskTimelineChart'
 import LabelOverrideForm from '../components/LabelOverrideForm'
-// import TagOverrideForm from '../components/TagOverrideForm'
+import TagOverrideForm from '../components/TagOverrideForm'
+import SummaryOverrideForm from '../components/SummaryOverrideForm'
 import { usePolling } from '../hooks/usePolling'
 
 function hasRiskTimeline(timeline: IncidentDetailType['risk_timeline']) {
   if (!timeline) return false
   if (Array.isArray(timeline)) return timeline.length > 0
   return Array.isArray(timeline.points) && timeline.points.length > 0
+}
+
+function formatEditTarget(item: NonNullable<IncidentDetailType['edit_history']>[number]) {
+  return `${item.action} ${item.target}`
 }
 
 export default function IncidentDetail() {
@@ -98,6 +103,8 @@ export default function IncidentDetail() {
             <dl className="meta-list">
               <dt>Uploaded</dt>
               <dd>{new Date(incident.uploaded_at).toLocaleString()}</dd>
+              <dt>Uploader</dt>
+              <dd>{incident.uploader?.display_name ?? '—'}</dd>
               <dt>Classification</dt>
               <dd>
                 <LabelBadge
@@ -141,6 +148,14 @@ export default function IncidentDetail() {
         </section>
       )}
 
+      {incident.status === 'completed' && (
+        <SummaryOverrideForm
+          incidentId={incident.id}
+          currentSummary={incident.summary}
+          onUpdated={() => load(true)}
+        />
+      )}
+
       {hasRiskTimeline(incident.risk_timeline) && incident.risk_timeline && (
         <section className="card">
           <h2>Risk timeline</h2>
@@ -163,11 +178,28 @@ export default function IncidentDetail() {
         </section>
       )}
 
-      {/* <TagOverrideForm
-        incidentId={incident.id}
-        currentTags={incident.tags ?? []}
-        onUpdated={() => load(true)}
-      /> */}
+      {incident.status === 'completed' && (
+        <TagOverrideForm
+          incidentId={incident.id}
+          currentTags={incident.tags ?? []}
+          onUpdated={() => load(true)}
+        />
+      )}
+
+      {incident.edit_history && incident.edit_history.length > 0 && (
+        <section className="card">
+          <h2>Edit history</h2>
+          <ul className="edit-history-list">
+            {incident.edit_history.map((item) => (
+              <li key={item.id}>
+                <span>{formatEditTarget(item)}</span>
+                <strong>{item.user?.display_name ?? 'Unknown user'}</strong>
+                <time>{new Date(item.created_at).toLocaleString()}</time>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   )
 }

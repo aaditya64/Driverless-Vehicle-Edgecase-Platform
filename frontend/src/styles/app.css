@@ -54,6 +54,22 @@
   font-weight: 500;
 }
 
+.nav-button {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.nav-button:hover {
+  background: var(--accent-bg);
+  color: var(--text-h);
+}
+
 .app-main {
   flex: 1;
   max-width: 1100px;
@@ -104,6 +120,15 @@
   color: var(--text);
   opacity: 0.75;
   font-size: 0.9rem;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
 }
 
 /* Cards */
@@ -240,6 +265,12 @@
   color: #16a34a;
   font-size: 0.875rem;
   margin: 8px 0;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* Dropzone */
@@ -551,6 +582,34 @@
   color: var(--text-h);
   font-size: 0.9rem;
   overflow-wrap: anywhere;
+}
+
+.edit-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.edit-history-list li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-size: 0.85rem;
+}
+
+.edit-history-list strong {
+  color: var(--text-h);
+}
+
+.edit-history-list time {
+  color: var(--text);
 }
 
 .annotation-form {

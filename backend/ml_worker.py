@@ -396,7 +396,10 @@ def _analysis_tags(data: dict[str, Any]) -> list[tuple[str, str]]:
     _append(tags, "model_version", runtime.get("model_version"))
     _append(tags, "processing_seconds", runtime.get("processing_seconds"))
     _append(tags, "model", outcome.get("model"))
-    return tags
+    _append(tags, "risk_timeline_points_count", _points_count(data))
+    for tag_type, tag_value in _flatten_json_tags(data):
+        _append(tags, tag_type, tag_value)
+    return _dedupe_tags(tags)
 
 
 def _label_confidence(outcome: dict[str, Any], label: str) -> float | None:
@@ -436,3 +439,53 @@ def _append_many(tags: list[tuple[str, str]], tag_type: str, values: Any) -> Non
         return
     for value in values:
         _append(tags, tag_type, value)
+
+
+def _flatten_json_tags(value: Any, prefix: str = "") -> list[tuple[str, str]]:
+    if prefix == "risk_timeline_points":
+        return []
+    if isinstance(value, dict):
+        tags: list[tuple[str, str]] = []
+        for key, child in value.items():
+            child_key = f"{prefix}_{key}" if prefix else str(key)
+            if child_key == "risk_timeline_points":
+                continue
+            tags.extend(_flatten_json_tags(child, child_key))
+        return tags
+    if isinstance(value, list):
+        tags = []
+        for index, child in enumerate(value):
+            if isinstance(child, dict):
+                tags.extend(_flatten_json_tags(child, f"{prefix}_{index}"))
+            else:
+                tags.append((prefix, _stringify_tag_value(child)))
+        return tags
+    if value is None:
+        return []
+    return [(prefix, _stringify_tag_value(value))]
+
+
+def _stringify_tag_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _points_count(data: dict[str, Any]) -> int | None:
+    timeline = _dict(_dict(data.get("risk")).get("timeline"))
+    points = timeline.get("points")
+    return len(points) if isinstance(points, list) else None
+
+
+def _dedupe_tags(tags: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    deduped = []
+    for tag_type, tag_value in tags:
+        key = (tag_type, tag_value)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped

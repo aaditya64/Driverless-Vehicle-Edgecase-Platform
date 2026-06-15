@@ -4,6 +4,7 @@ import { deleteIncident, listIncidents } from '../api/incidents'
 import type { IncidentSummary } from '../types/incident'
 import StatusBadge from '../components/StatusBadge'
 import LabelBadge from '../components/LabelBadge'
+import { useAuth } from '../auth/AuthContext'
 import IncidentFilters, {
   DEFAULT_FILTERS,
   filtersToParams,
@@ -12,6 +13,7 @@ import IncidentFilters, {
 import { usePolling } from '../hooks/usePolling'
 
 export default function IncidentList() {
+  const { user } = useAuth()
   const [incidents, setIncidents] = useState<IncidentSummary[]>([])
   const [filters, setFilters] = useState<IncidentFilterState>(DEFAULT_FILTERS)
   const [loading, setLoading] = useState(true)
@@ -41,6 +43,10 @@ export default function IncidentList() {
   usePolling(() => load(true), 5000, hasActiveProcessing)
 
   const handleDelete = async (incident: IncidentSummary) => {
+    if (!user) {
+      setError('Log in to remove incidents.')
+      return
+    }
     const confirmed = window.confirm(
       'Remove this incident record and delete its uploaded video?',
     )
@@ -148,7 +154,8 @@ export default function IncidentList() {
                       <button
                         type="button"
                         className="btn btn-danger btn-sm"
-                        disabled={deletingId === i.id}
+                        disabled={deletingId === i.id || !user}
+                        title={user ? 'Remove incident' : 'Log in to remove incidents'}
                         onClick={() => handleDelete(i)}
                       >
                         {deletingId === i.id ? 'Removing…' : 'Remove'}
