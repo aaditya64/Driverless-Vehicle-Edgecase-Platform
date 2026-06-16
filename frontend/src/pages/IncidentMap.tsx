@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { listIncidents } from '../api/incidents'
@@ -20,6 +20,7 @@ function pinColor(incident: IncidentSummary): string {
 }
 
 export default function IncidentMap() {
+  const navigate = useNavigate()
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<mapboxgl.Map | null>(null)
   const markersRef = useRef<mapboxgl.Marker[]>([])
@@ -91,14 +92,32 @@ export default function IncidentMap() {
       el.className = 'map-pin'
       el.style.backgroundColor = pinColor(incident)
 
-      const popup = new mapboxgl.Popup({ offset: 16 }).setHTML(`
-        <div class="map-popup">
-          <strong>${incident.label?.value?.replace('_', ' ') ?? 'Unclassified'}</strong>
-          <span class="map-popup-status">${incident.status}</span>
-          <p>${incident.narrative ? incident.narrative.slice(0, 100) : 'No narrative'}</p>
-          <a href="/incidents/${incident.id}">View incident →</a>
-        </div>
-      `)
+      const popupContent = document.createElement('div')
+      popupContent.className = 'map-popup'
+
+      const label = document.createElement('strong')
+      label.textContent = incident.label?.value?.replace('_', ' ') ?? 'Unclassified'
+      popupContent.appendChild(label)
+
+      const status = document.createElement('span')
+      status.className = 'map-popup-status'
+      status.textContent = incident.status
+      popupContent.appendChild(status)
+
+      const narrative = document.createElement('p')
+      narrative.textContent = incident.narrative
+        ? incident.narrative.slice(0, 100)
+        : 'No narrative'
+      popupContent.appendChild(narrative)
+
+      const viewButton = document.createElement('button')
+      viewButton.type = 'button'
+      viewButton.className = 'link-button'
+      viewButton.textContent = 'View incident'
+      viewButton.addEventListener('click', () => navigate(`/incidents/${incident.id}`))
+      popupContent.appendChild(viewButton)
+
+      const popup = new mapboxgl.Popup({ offset: 16 }).setDOMContent(popupContent)
 
       const marker = new mapboxgl.Marker({ element: el })
         .setLngLat([incident.location_lng!, incident.location_lat!])
@@ -113,7 +132,7 @@ export default function IncidentMap() {
       located.forEach((i) => bounds.extend([i.location_lng!, i.location_lat!]))
       map.fitBounds(bounds, { padding: 60, maxZoom: 14 })
     }
-  }, [incidents])
+  }, [incidents, navigate])
 
   if (!MAPBOX_TOKEN) {
     return (
