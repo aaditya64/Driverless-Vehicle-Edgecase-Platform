@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { deleteIncident, listIncidents } from '../api/incidents'
+import { deleteIncident, exportIncidents, getIncident, listIncidents } from '../api/incidents'
 import type { IncidentSummary } from '../types/incident'
 import StatusBadge from '../components/StatusBadge'
 import LabelBadge from '../components/LabelBadge'
@@ -19,6 +19,8 @@ export default function IncidentList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [downloadingFiltered, setDownloadingFiltered] = useState(false)
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -64,6 +66,46 @@ export default function IncidentList() {
     }
   }
 
+  const downloadJson = (filename: string, data: unknown) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: 'application/json',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadFiltered = async () => {
+    setDownloadingFiltered(true)
+    setError(null)
+    try {
+      const data = await exportIncidents(filtersToParams(filters))
+      downloadJson(`incidents-filtered-${new Date().toISOString().slice(0, 10)}.json`, data)
+    } catch {
+      setError('Could not download filtered incidents.')
+    } finally {
+      setDownloadingFiltered(false)
+    }
+  }
+
+  const handleDownloadIncident = async (incident: IncidentSummary) => {
+    setDownloadingId(incident.id)
+    setError(null)
+    try {
+      const data = await getIncident(incident.id)
+      downloadJson(`incident-${incident.id}.json`, data)
+    } catch {
+      setError('Could not download incident.')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -76,9 +118,19 @@ export default function IncidentList() {
             )}
           </p>
         </div>
-        <Link to="/upload" className="btn btn-primary">
-          Upload video
-        </Link>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={downloadingFiltered || loading}
+            onClick={handleDownloadFiltered}
+          >
+            {downloadingFiltered ? 'Downloading...' : 'Download filtered'}
+          </button>
+          <Link to="/upload" className="btn btn-primary">
+            Upload video
+          </Link>
+        </div>
       </div>
 
       <IncidentFilters filters={filters} onChange={setFilters} />
@@ -100,9 +152,7 @@ export default function IncidentList() {
                 <th>Uploaded</th>
                 <th>Status</th>
                 <th>Classification</th>
-                <th>Tags</th>
                 <th>Narrative</th>
-                <th>Location</th>
                 <th />
               </tr>
             </thead>
@@ -119,29 +169,9 @@ export default function IncidentList() {
                       source={i.label?.source}
                     />
                   </td>
-                  <td className="tags-cell">
-                    {i.tags?.length ? (
-                      <span className="tags-cell-preview">
-                        {i.tags
-                          .slice(0, 2)
-                          .map((t) => t.tag_value)
-                          .join(', ')}
-                        {i.tags.length > 2 ? ` +${i.tags.length - 2}` : ''}
-                      </span>
-                    ) : (
-                      <span className="text-muted">—</span>
-                    )}
-                  </td>
                   <td className="narrative-cell">
                     {i.narrative ? (
                       i.narrative.length > 80 ? `${i.narrative.slice(0, 80)}…` : i.narrative
-                    ) : (
-                      <span className="text-muted">—</span>
-                    )}
-                  </td>
-                  <td>
-                    {i.location_lat != null && i.location_lng != null ? (
-                      `${i.location_lat.toFixed(4)}, ${i.location_lng.toFixed(4)}`
                     ) : (
                       <span className="text-muted">—</span>
                     )}
@@ -151,6 +181,14 @@ export default function IncidentList() {
                       <Link to={`/incidents/${i.id}`} className="btn btn-ghost btn-sm">
                         View
                       </Link>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={downloadingId === i.id}
+                        onClick={() => handleDownloadIncident(i)}
+                      >
+                        {downloadingId === i.id ? 'Downloading...' : 'Download'}
+                      </button>
                       <button
                         type="button"
                         className="btn btn-danger btn-sm"

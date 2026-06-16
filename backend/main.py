@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, Literal
@@ -84,6 +84,10 @@ class TagOverride(BaseModel):
 
 class SummaryOverride(BaseModel):
     text: str
+
+
+def _labelize_tag_type(value: str) -> str:
+    return value.replace("_", " ").replace("-", " ").title()
 
 
 def _serialize_label(label: Label | None) -> dict | None:
@@ -220,6 +224,50 @@ def _record_edit(
     )
 
 
+def _incident_query(
+    db: Session,
+    *,
+    label: Optional[str] = None,
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    tag_type: Optional[str] = None,
+    tag_value: Optional[str] = None,
+    has_location: Optional[bool] = None,
+):
+    query = db.query(Incident)
+    if status:
+        query = query.filter(Incident.status == status)
+    if label:
+        query = query.join(Label, Label.incident_id == Incident.id).filter(Label.value == label)
+    if q:
+        pattern = f"%{q}%"
+        query = query.filter(
+            or_(Incident.narrative.ilike(pattern), Incident.id.ilike(pattern))
+        )
+    if date_from:
+        query = query.filter(Incident.uploaded_at >= datetime.fromisoformat(date_from))
+    if date_to:
+        query = query.filter(Incident.uploaded_at <= datetime.fromisoformat(date_to))
+    if tag_type or tag_value:
+        query = query.join(Tag, Tag.incident_id == Incident.id)
+        if tag_type:
+            query = query.filter(Tag.tag_type == tag_type)
+        if tag_value:
+            query = query.filter(Tag.tag_value.ilike(f"%{tag_value}%"))
+    if has_location is True:
+        query = query.filter(
+            Incident.location_lat.isnot(None),
+            Incident.location_lng.isnot(None),
+        )
+    elif has_location is False:
+        query = query.filter(
+            or_(Incident.location_lat.is_(None), Incident.location_lng.is_(None))
+        )
+    return query
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -330,41 +378,64 @@ def list_incidents(
     order: Literal["asc", "desc"] = "desc",
     db: Session = Depends(get_db),
 ):
-    query = db.query(Incident)
-    if status:
-        query = query.filter(Incident.status == status)
-    if label:
-        query = query.join(Label, Label.incident_id == Incident.id).filter(Label.value == label)
-    if q:
-        pattern = f"%{q}%"
-        query = query.filter(
-            or_(Incident.narrative.ilike(pattern), Incident.id.ilike(pattern))
-        )
-    if date_from:
-        query = query.filter(Incident.uploaded_at >= datetime.fromisoformat(date_from))
-    if date_to:
-        query = query.filter(Incident.uploaded_at <= datetime.fromisoformat(date_to))
-    if tag_type or tag_value:
-        query = query.join(Tag, Tag.incident_id == Incident.id)
-        if tag_type:
-            query = query.filter(Tag.tag_type == tag_type)
-        if tag_value:
-            query = query.filter(Tag.tag_value.ilike(f"%{tag_value}%"))
-    if has_location is True:
-        query = query.filter(
-            Incident.location_lat.isnot(None),
-            Incident.location_lng.isnot(None),
-        )
-    elif has_location is False:
-        query = query.filter(
-            or_(Incident.location_lat.is_(None), Incident.location_lng.is_(None))
-        )
+    query = _incident_query(
+        db,
+        label=label,
+        status=status,
+        q=q,
+        date_from=date_from,
+        date_to=date_to,
+        tag_type=tag_type,
+        tag_value=tag_value,
+        has_location=has_location,
+    )
     sort_col = Incident.uploaded_at
     query = query.order_by(sort_col.asc() if order == "asc" else sort_col.desc())
     incidents = query.distinct().all()
     return {
         "incidents": [_serialize_incident(i, db) for i in incidents],
     }
+
+
+@app.get("/tags/types")
+def list_tag_types(db: Session = Depends(get_db)):
+    rows = (
+        db.query(Tag.tag_type, func.count(func.distinct(Tag.tag_value)))
+        .group_by(Tag.tag_type)
+        .order_by(Tag.tag_type.asc())
+        .all()
+    )
+    return {
+        "tag_types": [
+            {
+                "value": tag_type,
+                "label": _labelize_tag_type(tag_type),
+                "value_count": value_count,
+                "has_value_options": value_count <= 50,
+            }
+            for tag_type, value_count in rows
+        ],
+    }
+
+
+@app.get("/tags/values")
+def list_tag_values(tag_type: str, db: Session = Depends(get_db)):
+    rows = (
+        db.query(Tag.tag_value)
+        .filter(Tag.tag_type == tag_type)
+        .distinct()
+        .order_by(Tag.tag_value.asc())
+        .all()
+    )
+    values = [value for (value,) in rows]
+    has_value_options = len(values) <= 50 and all(len(value) <= 80 for value in values)
+    return {
+        "tag_type": tag_type,
+        "values": values if has_value_options else [],
+        "value_count": len(values),
+        "has_value_options": has_value_options,
+    }
+
 
 @app.get("/incidents/{incident_id}")
 def get_incident(incident_id: str, db: Session = Depends(get_db)):
@@ -546,9 +617,33 @@ def override_summary(
 # ── Export ────────────────────────────────────────────────────────────────────
 
 @app.get("/export")
-def export_incidents(db: Session = Depends(get_db)):
-    incidents = db.query(Incident).order_by(Incident.uploaded_at.desc()).all()
+def export_incidents(
+    label: Optional[str] = None,
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    tag_type: Optional[str] = None,
+    tag_value: Optional[str] = None,
+    has_location: Optional[bool] = None,
+    order: Literal["asc", "desc"] = "desc",
+    db: Session = Depends(get_db),
+):
+    query = _incident_query(
+        db,
+        label=label,
+        status=status,
+        q=q,
+        date_from=date_from,
+        date_to=date_to,
+        tag_type=tag_type,
+        tag_value=tag_value,
+        has_location=has_location,
+    )
+    sort_col = Incident.uploaded_at
+    incidents = query.order_by(sort_col.asc() if order == "asc" else sort_col.desc()).distinct().all()
     return {
+        "count": len(incidents),
         "incidents": [
             _serialize_incident(i, db, include_ml=True) for i in incidents
         ],

@@ -7,6 +7,20 @@ import type {
   TagOverridePayload,
 } from '../types/incident'
 
+export interface TagTypeOption {
+  value: string
+  label: string
+  value_count: number
+  has_value_options: boolean
+}
+
+export interface TagValuesResponse {
+  tag_type: string
+  values: string[]
+  value_count: number
+  has_value_options: boolean
+}
+
 export interface ListIncidentsParams {
   label?: string
   status?: string
@@ -26,6 +40,28 @@ export async function listIncidents(
     params,
   })
   return data.incidents
+}
+
+export async function exportIncidents(
+  params: ListIncidentsParams = {},
+): Promise<{ count: number; incidents: IncidentDetail[] }> {
+  const { data } = await api.get<{ count: number; incidents: IncidentDetail[] }>(
+    '/export',
+    { params },
+  )
+  return data
+}
+
+export async function getTagTypes(): Promise<TagTypeOption[]> {
+  const { data } = await api.get<{ tag_types: TagTypeOption[] }>('/tags/types')
+  return data.tag_types
+}
+
+export async function getTagValues(tagType: string): Promise<TagValuesResponse> {
+  const { data } = await api.get<TagValuesResponse>('/tags/values', {
+    params: { tag_type: tagType },
+  })
+  return data
 }
 
 export async function getIncident(id: string): Promise<IncidentDetail> {

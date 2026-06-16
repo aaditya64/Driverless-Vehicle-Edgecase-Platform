@@ -1,4 +1,7 @@
+import { useEffect, useState } from 'react'
 import type { ListIncidentsParams } from '../api/incidents'
+import { getTagTypes, getTagValues } from '../api/incidents'
+import type { TagTypeOption, TagValuesResponse } from '../api/incidents'
 import { SEMANTIC_TAG_TYPES } from '../constants/tags'
 
 export interface IncidentFilterState {
@@ -51,7 +54,54 @@ export default function IncidentFilters({
   hasLocation,
   onHasLocationChange,
 }: IncidentFiltersProps) {
+  const [tagTypes, setTagTypes] = useState<TagTypeOption[]>(() =>
+    SEMANTIC_TAG_TYPES.map((t) => ({
+      value: t.value,
+      label: t.label,
+      value_count: 0,
+      has_value_options: false,
+    })),
+  )
+  const [tagValues, setTagValues] = useState<TagValuesResponse | null>(null)
+
+  useEffect(() => {
+    let active = true
+    getTagTypes()
+      .then((nextTypes) => {
+        if (active && nextTypes.length > 0) setTagTypes(nextTypes)
+      })
+      .catch(() => {
+        // Keep the local fallback list if the metadata endpoint is unavailable.
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    setTagValues(null)
+    if (!filters.tagType) return
+
+    getTagValues(filters.tagType)
+      .then((nextValues) => {
+        if (active) setTagValues(nextValues)
+      })
+      .catch(() => {
+        if (active) setTagValues(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [filters.tagType])
+
   const set = (patch: Partial<IncidentFilterState>) => onChange({ ...filters, ...patch })
+  const selectedTagType = tagTypes.find((t) => t.value === filters.tagType)
+  const useTagValueSelect =
+    Boolean(filters.tagType) &&
+    Boolean(selectedTagType?.has_value_options) &&
+    Boolean(tagValues?.has_value_options) &&
+    Boolean(tagValues?.values.length)
 
   return (
     <div className="filters card">
@@ -115,10 +165,10 @@ export default function IncidentFilters({
         <select
           id="filter-tag-type"
           value={filters.tagType}
-          onChange={(e) => set({ tagType: e.target.value })}
+          onChange={(e) => set({ tagType: e.target.value, tagValue: '' })}
         >
           <option value="">All</option>
-          {SEMANTIC_TAG_TYPES.map((t) => (
+          {tagTypes.map((t) => (
             <option key={t.value} value={t.value}>
               {t.label}
             </option>
@@ -127,13 +177,28 @@ export default function IncidentFilters({
       </div>
       <div className="filter-group">
         <label htmlFor="filter-tag-value">Tag value</label>
-        <input
-          id="filter-tag-value"
-          type="text"
-          placeholder="e.g. pedestrian"
-          value={filters.tagValue}
-          onChange={(e) => set({ tagValue: e.target.value })}
-        />
+        {useTagValueSelect ? (
+          <select
+            id="filter-tag-value"
+            value={filters.tagValue}
+            onChange={(e) => set({ tagValue: e.target.value })}
+          >
+            <option value="">All</option>
+            {tagValues?.values.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            id="filter-tag-value"
+            type="text"
+            placeholder={filters.tagType ? 'Search tag value' : 'Select a tag type first'}
+            value={filters.tagValue}
+            onChange={(e) => set({ tagValue: e.target.value })}
+          />
+        )}
       </div>
       <div className="filter-group">
         <label htmlFor="filter-order">Sort</label>
