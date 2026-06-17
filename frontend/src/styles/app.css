@@ -343,6 +343,13 @@
   color: var(--text-h);
 }
 
+.filter-hint-error {
+  display: block;
+  margin-top: 6px;
+  color: #dc2626;
+  font-size: 0.75rem;
+}
+
 /* Table */
 .incident-table-wrap {
   overflow-x: auto;

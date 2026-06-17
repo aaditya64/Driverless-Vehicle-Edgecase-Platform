@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { ListIncidentsParams } from '../api/incidents'
-import { getTagTypes, getTagValues } from '../api/incidents'
+import { getTagTypes, getTagValues, listIncidents } from '../api/incidents'
 import type { TagTypeOption, TagValuesResponse } from '../api/incidents'
-import { SEMANTIC_TAG_TYPES } from '../constants/tags'
+import type { IncidentSummary } from '../types/incident'
+
+const FINITE_TAG_VALUE_LIMIT = 100
 
 export interface IncidentFilterState {
   q: string
@@ -47,6 +49,46 @@ interface IncidentFiltersProps {
   onHasLocationChange?: (value: boolean | undefined) => void
 }
 
+function labelizeTagType(value: string): string {
+  return value.replace(/[_-]/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function deriveTagMetadata(incidents: IncidentSummary[]) {
+  const valuesByType = new Map<string, Set<string>>()
+
+  incidents.forEach((incident) => {
+    incident.tags?.forEach((tag) => {
+      const tagType = tag.tag_type.trim()
+      const tagValue = tag.tag_value.trim()
+      if (!tagType || !tagValue) return
+      const values = valuesByType.get(tagType) ?? new Set<string>()
+      values.add(tagValue)
+      valuesByType.set(tagType, values)
+    })
+  })
+
+  const tagTypes = Array.from(valuesByType.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([value, values]) => ({
+      value,
+      label: labelizeTagType(value),
+      value_count: values.size,
+      has_value_options:
+        values.size > 0 &&
+        values.size <= FINITE_TAG_VALUE_LIMIT &&
+        Array.from(values).every((tagValue) => tagValue.length <= 120),
+    }))
+
+  const tagValuesByType = Object.fromEntries(
+    Array.from(valuesByType.entries()).map(([tagType, values]) => [
+      tagType,
+      Array.from(values).sort((a, b) => a.localeCompare(b)),
+    ]),
+  )
+
+  return { tagTypes, tagValuesByType }
+}
+
 export default function IncidentFilters({
   filters,
   onChange,
@@ -54,25 +96,38 @@ export default function IncidentFilters({
   hasLocation,
   onHasLocationChange,
 }: IncidentFiltersProps) {
-  const [tagTypes, setTagTypes] = useState<TagTypeOption[]>(() =>
-    SEMANTIC_TAG_TYPES.map((t) => ({
-      value: t.value,
-      label: t.label,
-      value_count: 0,
-      has_value_options: false,
-    })),
-  )
+  const [tagTypes, setTagTypes] = useState<TagTypeOption[]>([])
+  const [derivedTagValues, setDerivedTagValues] = useState<Record<string, string[]>>({})
   const [tagValues, setTagValues] = useState<TagValuesResponse | null>(null)
+  const [tagMetadataError, setTagMetadataError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
-    getTagTypes()
-      .then((nextTypes) => {
-        if (active && nextTypes.length > 0) setTagTypes(nextTypes)
+
+    Promise.allSettled([getTagTypes(), listIncidents()])
+      .then(([apiTypesResult, incidentsResult]) => {
+        if (!active) return
+
+        if (incidentsResult.status === 'fulfilled') {
+          const derived = deriveTagMetadata(incidentsResult.value)
+          setDerivedTagValues(derived.tagValuesByType)
+          if (derived.tagTypes.length > 0) {
+            setTagTypes(derived.tagTypes)
+            setTagMetadataError(null)
+          }
+        }
+
+        if (apiTypesResult.status === 'fulfilled' && apiTypesResult.value.length > 0) {
+          setTagTypes(apiTypesResult.value)
+          setTagMetadataError(null)
+          return
+        }
+
+        if (incidentsResult.status !== 'fulfilled') {
+          setTagMetadataError('Could not load tag metadata.')
+        }
       })
-      .catch(() => {
-        // Keep the local fallback list if the metadata endpoint is unavailable.
-      })
+
     return () => {
       active = false
     }
@@ -80,7 +135,6 @@ export default function IncidentFilters({
 
   useEffect(() => {
     let active = true
-    setTagValues(null)
     if (!filters.tagType) return
 
     getTagValues(filters.tagType)
@@ -97,11 +151,22 @@ export default function IncidentFilters({
 
   const set = (patch: Partial<IncidentFilterState>) => onChange({ ...filters, ...patch })
   const selectedTagType = tagTypes.find((t) => t.value === filters.tagType)
+  const derivedValuesForSelectedType = filters.tagType
+    ? derivedTagValues[filters.tagType] ?? []
+    : []
+  const apiValuesForSelectedType =
+    tagValues?.tag_type === filters.tagType ? tagValues.values : []
+  const tagValueOptions =
+    tagValues?.tag_type === filters.tagType &&
+    tagValues.has_value_options &&
+    apiValuesForSelectedType.length > 0
+      ? apiValuesForSelectedType
+      : derivedValuesForSelectedType
   const useTagValueSelect =
     Boolean(filters.tagType) &&
-    Boolean(selectedTagType?.has_value_options) &&
-    Boolean(tagValues?.has_value_options) &&
-    Boolean(tagValues?.values.length)
+    Boolean(selectedTagType?.has_value_options || derivedValuesForSelectedType.length > 0) &&
+    tagValueOptions.length > 0 &&
+    tagValueOptions.length <= FINITE_TAG_VALUE_LIMIT
 
   return (
     <div className="filters card">
@@ -167,13 +232,14 @@ export default function IncidentFilters({
           value={filters.tagType}
           onChange={(e) => set({ tagType: e.target.value, tagValue: '' })}
         >
-          <option value="">All</option>
+          <option value="">{tagTypes.length ? 'All' : 'Loading tag types...'}</option>
           {tagTypes.map((t) => (
             <option key={t.value} value={t.value}>
-              {t.label}
+              {t.value}
             </option>
           ))}
         </select>
+        {tagMetadataError && <span className="filter-hint-error">{tagMetadataError}</span>}
       </div>
       <div className="filter-group">
         <label htmlFor="filter-tag-value">Tag value</label>
@@ -184,7 +250,7 @@ export default function IncidentFilters({
             onChange={(e) => set({ tagValue: e.target.value })}
           >
             <option value="">All</option>
-            {tagValues?.values.map((value) => (
+            {tagValueOptions.map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
