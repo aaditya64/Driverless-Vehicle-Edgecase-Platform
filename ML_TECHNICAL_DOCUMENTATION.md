@@ -4,7 +4,7 @@
 
 This document describes the machine-learning and computer-vision work present in this repository. It deliberately excludes frontend, database, deployment, and other full-stack concerns.
 
-Every implementation claim below is grounded in repository files. The canonical collision/contact implementation is under [`collision_contact_full_repro/`](collision_contact_full_repro/). Qwen 2.5-VL is documented in [`API_USAGE_README.md`](API_USAGE_README.md); its server source and adapter weights are referenced there as files on a separate cloud machine, but are not present in this repository. Consequently, this document records the Qwen configuration, inputs, outputs, schema, and measured results that are actually documented, but does not invent its prompt, decoding parameters, adapter method, training data, or internal server logic.
+Every implementation claim below is grounded in repository files. The canonical collision/contact implementation is under [`collision_contact_full_repro/`](collision_contact_full_repro/). Qwen 2.5-VL is documented in [`API_USAGE_README.md`](API_USAGE_README.md); its server source and adapter weights are referenced there Consequently, this document records the Qwen configuration, inputs, outputs, schema, and measured results that are actually documented, but does not invent its prompt, decoding parameters, adapter method, training data, or internal server logic.
 
 ## 1. ML problem decomposition
 
@@ -12,8 +12,6 @@ The repository contains two separate ML functions:
 
 1. **Traffic-event outcome inference**: classify an event-centred positive dashcam clip as `near_miss` or `collision`.
 2. **Semantic event generation**: use Qwen 2.5-VL to turn video evidence into a short summary and structured semantic tags such as scenario type, actor, environment, behaviour, collision geometry, and near-miss type.
-
-These functions are not the same model and should not be described as one end-to-end network.
 
 ```text
 Dashcam video
@@ -39,7 +37,7 @@ The outcome package explicitly solves:
 10-second event-centred Nexar positive clip -> near_miss or collision
 ```
 
-It does **not** by itself solve the full `safe / near_miss / collision` problem. The earlier BADAS work supplies a binary risk-oriented `safe` versus `collision_or_near_miss` stage, while the current best package concentrates on the harder positive-only physical-contact boundary. See [`README.md`](README.md), [`ML_PIPELINE_CONTEXT_AND_PROGRESS.md`](ML_PIPELINE_CONTEXT_AND_PROGRESS.md), and [`collision_contact_full_repro/README.md`](collision_contact_full_repro/README.md).
+
 
 ## 2. Dataset, labels, and evaluation protocol
 
@@ -756,37 +754,24 @@ The referenced server lives at:
 That implementation and `model_adapter/deploy_24f_r8_e1_clean` are not in this repository. The local [`backend/main.py`](backend/main.py) contains only a health endpoint. Therefore, the following details cannot be asserted from this repository:
 
 - exact frame-sampling positions;
+
 - prompt template and system instructions;
+
 - Qwen processor/Transformers versions;
+
 - adapter architecture or fine-tuning method;
+
 - training/validation datasets;
+
 - decoding strategy;
+
 - JSON repair, schema validation, retry, or hallucination-control logic;
+
 - whether the summary and every field are produced in one generation or post-processed across stages.
 
-## 15. Earlier and alternative ML work
+  
 
-These components exist in the repository but are not the selected final path.
-
-### 15.1 Wavelet-Shake Transformer
-
-Implementation: [`doc/nexar_wst/src/model_wst.py`](doc/nexar_wst/src/model_wst.py).
-
-The Wavelet-Shake Transformer patchifies the `raw + CWT + SWT` time sequence, projects flattened temporal patches into a learned embedding, prepends a learned class token, adds learned positional embeddings, and applies a pre-normalised `nn.TransformerEncoder`. A separate MLP embeds handcrafted features; the class-token and handcrafted embeddings are concatenated, projected, and classified.
-
-The documented default experiment uses 300 frames, 20 raw channels, `12 x 48` CWT channels, `12 x 5` SWT channels, four transformer layers, `d_model=128`, four attention heads, feed-forward dimension 256, dropout `0.15`, patch length/stride `4`, AdamW, class-weighted cross entropy, label smoothing, gradient clipping, and early stopping on a validation composite dominated by macro-F1. A supervised contrastive-loss implementation exists, but the checked configuration sets its weight to `0.0`.
-
-Handcrafted-feature baselines include balanced logistic regression and a 300-tree depth-4 balanced random forest. The final reported package moved to tabular rescue fusion rather than using this transformer as the selected outcome classifier.
-
-### 15.2 Standalone impact and residual-flow heads
-
-The package includes standalone impact-physics, deep-impulse, object-CoTracker, and residual-flow training scripts. They evaluate logistic regression, histogram gradient boosting, Extra Trees, XGBoost, LightGBM, and related fusion rules. They document the experiment path that led to the final rescue design; their outputs are not the selected `val_selected_deep_rescue` artifact unless explicitly referenced by the final training script.
-
-### 15.3 SAVeD dataset preparation
-
-The repository notes that SAVeD/AV data was downloaded and clipped, with 1,020 collision clips and 586 near-miss clips after preparation. It was **not used** in the reported 93.96% Nexar fixed-split result.
-
-## 16. Final reported metrics
+## 15. Final reported metrics
 
 The selected fixed-split result is stored in [`val_selected_deep_rescue_summary.json`](collision_contact_full_repro/outputs/collision_contact_model/val_selected_deep_rescue_summary.json):
 
@@ -808,110 +793,7 @@ test confusion matrix: [[75, 4], [5, 65]]
 
 The confusion-matrix order is `[near_miss, collision]`. The model makes nine errors on 149 test clips: four near misses predicted as collisions and five collisions predicted as near misses.
 
-## 17. Saved ML artifacts
-
-### 17.1 Final rescue artifacts
-
-```text
-collision_contact_full_repro/outputs/collision_contact_model/
-  val_selected_deep_rescue_models.joblib
-  val_selected_deep_rescue_summary.json
-  val_selected_deep_rescue_predictions.json
-  val_selected_deep_rescue_errors.json
-  val_selected_deep_rescue_probabilities.npz
-```
-
-The Joblib artifact stores fitted candidate models, all 4,063 feature names, the selected fusion metadata, and training arguments. The prediction JSON stores `path`, true label, collision probability, predicted label, and correctness for the fixed test set.
-
-### 17.2 Precomputed direct features
-
-```text
-collision_contact_full_repro/outputs/processed_744/features/
-collision_contact_full_repro/outputs/processed_744/
-  object_cotracker_dynamics_yolov8s_32f_w384_20260524/
-collision_contact_full_repro/analysis/impact_diagnostics_20260522/
-```
-
-There are 744 motion/wavelet feature files, 744 motion CSVs, 744 CoTracker files, and train/test object-metrics CSVs.
-
-### 17.3 Released anchor
-
-```text
-collision_contact_full_repro/assets/released_anchor/
-  strong_fusion_probabilities.npz
-  long_context_oof_experts_summary.json
-```
-
-The normal reproduction path copies these files into `outputs/processed_744_long_context_anchor/`; it does not retrain DINO, VideoMAE, RAFT, YOLO, BADAS, or the long-context experts.
-
-## 18. Advantages of the method
-
-### 18.1 Lightweight final decision stage compared with VLM generation
-
-The final outcome decision is computationally small once features and the anchor probability are available. It does not run an autoregressive vision-language decoder to decide `near_miss` versus `collision`. Instead, it:
-
-1. reads a fixed 4,063-dimensional numerical vector;
-2. applies imputation and `sign(x) * log(1 + |x|)`;
-3. retains 512 features with a pre-fitted ANOVA F-score selector;
-4. evaluates a LightGBM classifier with 340 trees and seven leaves per tree;
-5. applies one scalar rescue equation to the cached anchor probability.
-
-This makes the **final classifier stage** substantially smaller than invoking the documented 7-billion-parameter Qwen 2.5-VL model for outcome classification. It also avoids autoregressive token generation for the binary decision. The design reserves Qwen 2.5-VL for the task where a VLM is useful: producing summaries and semantic tags.
-
-This advantage must be stated precisely. The repository does not contain an end-to-end latency, FLOP, energy, or memory benchmark comparing the complete raw-video outcome pipeline with Qwen. A full feature rebuild still runs several neural extractors, including DINO/DINOv3, VideoMAE, RAFT, YOLO, BADAS/V-JEPA2, and CoTracker. Therefore, the evidence supports a low-cost **downstream decision head** and efficient reuse of cached features, but not a measured claim that first-time extraction of the entire outcome stack is always cheaper than one VLM request.
-
-### 18.2 Feature extraction can be cached and reused
-
-The expensive visual and tracking operations are separated from classifier training. DINO, VideoMAE, RAFT, YOLO, BADAS, motion/wavelet, and CoTracker outputs are saved as `.npz` feature files. This provides two practical advantages:
-
-- classifier experiments do not repeatedly decode every video or rerun every backbone;
-- the final LightGBM head can be retrained and evaluated from precomputed features without raw videos or model downloads.
-
-The repository's fast-reproduction path explicitly skips raw-video feature extraction and trains from the saved feature assets. This is particularly useful when testing feature selection, tree-model hyperparameters, thresholds, or rescue-fusion rules.
-
-### 18.3 Specialised models are used for specialised evidence
-
-The system does not ask one general-purpose model to infer every property implicitly. Each component contributes evidence aligned with its implementation:
-
-- DINO/DINOv3 encode frame appearance;
-- VideoMAE encodes spatiotemporal visual content;
-- RAFT measures dense optical flow;
-- YOLO identifies risk-relevant actors and regions;
-- CoTracker follows points inside selected object boxes;
-- BADAS/V-JEPA2 supplies learned risk-oriented video features;
-- affine motion and wavelets expose camera shake and short impact transients;
-- Qwen 2.5-VL converts visual evidence into human-readable semantics.
-
-This modularity allows the collision/contact classifier to use numerical motion and physical-contact evidence while the VLM handles open-ended language generation.
-
-### 18.4 Physically interpretable intermediate signals
-
-Many direct final features have an explicit meaning: residual displacement after ego-motion removal, acceleration, jerk, wavelet-band energy, object-box shift, scale/area change, point-track visibility, shape change, impulse score, and post-impact ring-down. The final artifact also stores all 4,063 feature names.
-
-These signals are easier to inspect during error analysis than an outcome produced only as generated text. The repository can trace a prediction back to motion CSVs, feature arrays, object metrics, CoTracker summaries, the anchor probability, and the rescue probability.
-
-### 18.5 Stable structured outcome interface
-
-The outcome branch produces a scalar `prob_collision` and applies an explicit threshold. Its class mapping and fusion equation are fixed in code. Semantic generation remains downstream and can receive `provided_outcome`, so wording or tag-generation behaviour does not determine the numerical collision decision.
-
-This separation also permits independent evaluation:
-
-- outcome quality is measured with accuracy, balanced accuracy, macro-F1, AUROC, log loss, and a confusion matrix;
-- Qwen semantics are measured field by field for actor, scenario type, lighting, weather, road family, and collision target.
-
-### 18.6 Rescue fusion preserves a strong baseline unless extra evidence is sufficient
-
-The selected fusion is not an unrestricted average of the anchor and LightGBM probabilities. When the LightGBM probability `q` is at or below the rescue point `0.371`, the rescue delta is zero and the anchor is unchanged. Only stronger LightGBM evidence increases the collision logit.
-
-This is a useful property for a specialised contact detector: the additional physics/CoTracker head is used to recover collision cases only when its evidence crosses the validation-selected activation point. The final decision remains an explicit, auditable formula rather than an opaque second-stage generation.
-
-### 18.7 Works with a relatively compact labelled outcome dataset
-
-The final supervised outcome heads are trained on the fixed 744-video labelled set rather than fine-tuning all visual backbones. The pretrained extractors remain frozen, and only compact downstream classifiers are fitted. This reduces the number of trainable parameters in the project-specific outcome model and makes the fixed-split experiment feasible without training a large video or vision-language backbone from scratch.
-
-This is an architectural advantage, not evidence that the method is universally more data-efficient than every VLM approach; the repository contains no controlled data-scaling comparison.
-
-## 19. Reproducibility and interpretation constraints
+## 16. Reproducibility and interpretation constraints
 
 1. **Frozen feature models versus learned heads**: DINO, DINOv3, VideoMAE, RAFT, YOLO, CoTracker, and BADAS are loaded from pretrained weights for extraction. The repository trains downstream tabular/temporal heads, not these backbones.
 2. **Final direct inputs versus anchor ancestry**: the final LightGBM directly reads motion/wavelet/object/CoTracker features. DINO, VideoMAE, RAFT, YOLO-interaction, and BADAS influence it through the released anchor probability.
@@ -922,7 +804,7 @@ This is an architectural advantage, not evidence that the method is universally 
 7. **Qwen reproducibility is partial**: only the API contract and runtime configuration are present locally; server and adapter implementation details are external.
 8. **SAVeD is not part of the final metric**: it must not be included in the reported final training-set count.
 
-## 20. Primary source-file map
+## 17. Primary source-file map
 
 | Topic | Primary repository evidence |
 |---|---|
